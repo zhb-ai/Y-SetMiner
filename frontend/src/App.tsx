@@ -551,8 +551,7 @@ function App() {
                 label: (
                   <Space size={8}>
                     <SettingOutlined style={{ color: '#1677ff' }} />
-                    <span style={{ fontSize: 12, fontWeight: 600, color: '#262626' }}>高级设置</span>
-                    <Text style={{ fontSize: 11, color: '#8c8c8c' }}>基础字段 / 建议字段阈值</Text>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: '#262626', letterSpacing: 1 }}>高级设置</span>
                   </Space>
                 ),
                 children: (

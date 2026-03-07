@@ -32,6 +32,21 @@ interface GraphViewProps {
   data: GraphData;
 }
 
+type GraphViewMode = 'summary' | 'full';
+
+interface GraphPerformanceConfig {
+  disableEdgeLabels: boolean;
+  disableTooltip: boolean;
+  disableHover: boolean;
+  edgeType: 'line' | 'cubic';
+  maxLabelLength: number;
+}
+
+const LARGE_GRAPH_NODE_THRESHOLD = 80;
+const LARGE_GRAPH_EDGE_THRESHOLD = 140;
+const VERY_LARGE_GRAPH_NODE_THRESHOLD = 160;
+const VERY_LARGE_GRAPH_EDGE_THRESHOLD = 280;
+
 // ─── 节点颜色映射 ─────────────────────────────────────────────────────────────
 const NODE_COLORS: Record<string, { fill: string; stroke: string; labelColor: string }> = {
   table:       { fill: '#e6f4ff', stroke: '#1677ff', labelColor: '#1677ff' },
@@ -127,10 +142,59 @@ function estimateCanvasHeight(nodes: GraphNode[]) {
   return Math.max(620 + extraRows * 70, 620);
 }
 
+function canUseSummaryMode(scene: 'sql' | 'erp', data: GraphData) {
+  if (scene === 'sql') {
+    return data.nodes.some((node) => node.node_type === 'sql_file');
+  }
+  return data.nodes.some((node) => node.node_type === 'permission');
+}
+
+function buildSummaryGraph(scene: 'sql' | 'erp', data: GraphData): GraphData {
+  if (scene === 'sql') {
+    const nodes = data.nodes.filter((node) => node.node_type !== 'sql_file');
+    const visibleNodeIds = new Set(nodes.map((node) => node.id));
+    const edges = data.edges.filter(
+      (edge) =>
+        edge.edge_type !== 'covers' &&
+        visibleNodeIds.has(edge.source) &&
+        visibleNodeIds.has(edge.target),
+    );
+    return { nodes, edges };
+  }
+
+  const nodes = data.nodes.filter((node) => node.node_type !== 'permission');
+  const visibleNodeIds = new Set(nodes.map((node) => node.id));
+  const edges = data.edges.filter(
+    (edge) =>
+      edge.edge_type !== 'role_permission' &&
+      visibleNodeIds.has(edge.source) &&
+      visibleNodeIds.has(edge.target),
+  );
+  return { nodes, edges };
+}
+
+function buildPerformanceConfig(data: GraphData): GraphPerformanceConfig {
+  const isLarge =
+    data.nodes.length >= LARGE_GRAPH_NODE_THRESHOLD ||
+    data.edges.length >= LARGE_GRAPH_EDGE_THRESHOLD;
+  const isVeryLarge =
+    data.nodes.length >= VERY_LARGE_GRAPH_NODE_THRESHOLD ||
+    data.edges.length >= VERY_LARGE_GRAPH_EDGE_THRESHOLD;
+
+  return {
+    disableEdgeLabels: isLarge,
+    disableTooltip: isLarge,
+    disableHover: isLarge,
+    edgeType: isLarge ? 'line' : 'cubic',
+    maxLabelLength: isVeryLarge ? 10 : isLarge ? 12 : 16,
+  };
+}
+
 function buildLayeredNodeStyles(
   nodes: GraphNode[],
   containerWidth: number,
   canvasHeight: number,
+  perfConfig: GraphPerformanceConfig,
 ) {
   const layers = new Map<number, GraphNode[]>();
   nodes.forEach((node) => {
@@ -156,7 +220,10 @@ function buildLayeredNodeStyles(
         x: pos.x,
         y: pos.y,
         size: isLarge ? 52 : 38,
-        labelText: n.label.length > 16 ? n.label.slice(0, 14) + '…' : n.label,
+        labelText:
+          n.label.length > perfConfig.maxLabelLength
+            ? n.label.slice(0, Math.max(perfConfig.maxLabelLength - 2, 4)) + '…'
+            : n.label,
         labelPlacement: 'bottom' as const,
         labelOffsetY: 6,
         cursor: 'pointer' as const,
@@ -179,8 +246,13 @@ function getNodeStyle(node: GraphNode) {
   };
 }
 
-function buildG6Options(data: GraphData, containerWidth: number, canvasHeight: number): GraphOptions {
-  const g6Nodes = buildLayeredNodeStyles(data.nodes, containerWidth, canvasHeight);
+function buildG6Options(
+  data: GraphData,
+  containerWidth: number,
+  canvasHeight: number,
+  perfConfig: GraphPerformanceConfig,
+): GraphOptions {
+  const g6Nodes = buildLayeredNodeStyles(data.nodes, containerWidth, canvasHeight, perfConfig);
 
   const g6Edges = data.edges.map((e) => ({
     id: e.id,
@@ -193,7 +265,7 @@ function buildG6Options(data: GraphData, containerWidth: number, canvasHeight: n
       endArrow: true,
       endArrowSize: 7,
       // JOIN 边显示关联字段，其余边不显示标签（避免太杂）
-      labelText: e.edge_type === 'join' ? (e.label ?? '') : '',
+      labelText: !perfConfig.disableEdgeLabels && e.edge_type === 'join' ? (e.label ?? '') : '',
       labelFontSize: 10,
       labelFill: '#888',
       opacity: 0.85,
@@ -205,45 +277,47 @@ function buildG6Options(data: GraphData, containerWidth: number, canvasHeight: n
     height: canvasHeight,
     data: { nodes: g6Nodes, edges: g6Edges },
     node: { type: 'circle' },
-    edge: { type: 'cubic' },
+    edge: { type: perfConfig.edgeType },
     behaviors: [
       'drag-canvas',
       'zoom-canvas',
       'drag-element',
       { type: 'click-select', multiple: false },
-      'hover-activate',
+      ...(perfConfig.disableHover ? [] : ['hover-activate']),
     ],
-    plugins: [
-      {
-        type: 'tooltip',
-        getContent: (_: Event, items: { data?: { data?: GraphNode } }[]) => {
-          const item = items[0];
-          if (!item?.data?.data) return '';
-          const d = item.data.data as GraphNode;
-          const lines: string[] = [`<b>${d.label}</b>`];
-          if (d.node_type === 'wide_table') {
-            lines.push(`字段数：${d.field_count}`);
-            lines.push(`得分：${d.score}`);
-            if (d.has_join_warning) lines.push(`⚠ JOIN 孤立警告`);
-            if (d.has_granularity_warning) lines.push(`⚠ 粒度冲突警告`);
-            if (d.join_warning_reason) lines.push(String(d.join_warning_reason));
-            if (d.granularity_warning_reason) lines.push(String(d.granularity_warning_reason));
-            if (d.rationale) lines.push(String(d.rationale));
-          } else if (d.node_type === 'table') {
-            lines.push(`字段数：${d.field_count}`);
-          } else if (d.node_type === 'role') {
-            lines.push(`权限数：${d.permission_count}`);
-            lines.push(`得分：${d.score}`);
-            if (d.rationale) lines.push(String(d.rationale));
-          } else if (d.node_type === 'user') {
-            if ((d.uncovered_count as number) > 0) {
-              lines.push(`未覆盖权限数：${d.uncovered_count}`);
-            }
-          }
-          return `<div style="padding:4px 8px;font-size:12px;line-height:1.6">${lines.join('<br/>')}</div>`;
-        },
-      },
-    ],
+    plugins: perfConfig.disableTooltip
+      ? []
+      : [
+          {
+            type: 'tooltip',
+            getContent: (_: Event, items: { data?: { data?: GraphNode } }[]) => {
+              const item = items[0];
+              if (!item?.data?.data) return '';
+              const d = item.data.data as GraphNode;
+              const lines: string[] = [`<b>${d.label}</b>`];
+              if (d.node_type === 'wide_table') {
+                lines.push(`字段数：${d.field_count}`);
+                lines.push(`得分：${d.score}`);
+                if (d.has_join_warning) lines.push(`⚠ JOIN 孤立警告`);
+                if (d.has_granularity_warning) lines.push(`⚠ 粒度冲突警告`);
+                if (d.join_warning_reason) lines.push(String(d.join_warning_reason));
+                if (d.granularity_warning_reason) lines.push(String(d.granularity_warning_reason));
+                if (d.rationale) lines.push(String(d.rationale));
+              } else if (d.node_type === 'table') {
+                lines.push(`字段数：${d.field_count}`);
+              } else if (d.node_type === 'role') {
+                lines.push(`权限数：${d.permission_count}`);
+                lines.push(`得分：${d.score}`);
+                if (d.rationale) lines.push(String(d.rationale));
+              } else if (d.node_type === 'user') {
+                if ((d.uncovered_count as number) > 0) {
+                  lines.push(`未覆盖权限数：${d.uncovered_count}`);
+                }
+              }
+              return `<div style="padding:4px 8px;font-size:12px;line-height:1.6">${lines.join('<br/>')}</div>`;
+            },
+          },
+        ],
     autoFit: 'view',
     theme: 'light',
   };
@@ -290,15 +364,38 @@ export default function GraphView({ scene, data }: GraphViewProps) {
   const wrapRef = useRef<HTMLDivElement>(null);         // 画布外层（监听宽度）
   const fullscreenRef = useRef<HTMLDivElement>(null);   // 全屏目标容器
   const graphRef = useRef<G6Graph | undefined>(undefined);
+  const nodeLookupRef = useRef<Map<string, GraphNode>>(new Map());
 
   const [containerWidth, setContainerWidth] = useState(900);
   const [canvasHeight, setCanvasHeight] = useState(620);
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const naturalCanvasHeight = useMemo(() => estimateCanvasHeight(data.nodes), [data.nodes]);
+  const [viewMode, setViewMode] = useState<GraphViewMode>('full');
+  const supportsSummaryMode = useMemo(() => canUseSummaryMode(scene, data), [scene, data]);
+  const fullGraphIsLarge = useMemo(
+    () =>
+      data.nodes.length >= LARGE_GRAPH_NODE_THRESHOLD ||
+      data.edges.length >= LARGE_GRAPH_EDGE_THRESHOLD,
+    [data],
+  );
+  const displayData = useMemo(
+    () => (viewMode === 'summary' && supportsSummaryMode ? buildSummaryGraph(scene, data) : data),
+    [data, scene, supportsSummaryMode, viewMode],
+  );
+  const perfConfig = useMemo(() => buildPerformanceConfig(displayData), [displayData]);
+  const naturalCanvasHeight = useMemo(() => estimateCanvasHeight(displayData.nodes), [displayData.nodes]);
 
   // 注入全屏样式
   useEffect(() => { ensureFullscreenStyle(); }, []);
+
+  useEffect(() => {
+    nodeLookupRef.current = new Map(data.nodes.map((node) => [node.id, node]));
+  }, [data.nodes]);
+
+  useEffect(() => {
+    setViewMode(fullGraphIsLarge && supportsSummaryMode ? 'summary' : 'full');
+    setSelectedNode(null);
+  }, [fullGraphIsLarge, supportsSummaryMode, scene, data.nodes.length, data.edges.length]);
 
   // 监听容器宽度变化
   useEffect(() => {
@@ -329,18 +426,35 @@ export default function GraphView({ scene, data }: GraphViewProps) {
     }
   }, [isFullscreen, naturalCanvasHeight]);
 
+  useEffect(() => {
+    if (!selectedNode) return;
+    const isVisible = displayData.nodes.some((node) => node.id === selectedNode.id);
+    if (!isVisible) {
+      setSelectedNode(null);
+    }
+  }, [displayData.nodes, selectedNode]);
+
   // 构建 G6 options
   const options = useMemo(
-    () => buildG6Options(data, containerWidth, canvasHeight),
-    [data, containerWidth, canvasHeight],
+    () => buildG6Options(displayData, containerWidth, canvasHeight, perfConfig),
+    [displayData, containerWidth, canvasHeight, perfConfig],
   );
 
   // 初始化 G6 实例（Strict Mode 安全）
   useEffect(() => {
     if (!containerRef.current) return;
     const graph = new G6Graph({ container: containerRef.current });
+    const handleNodeClick = (evt: IElementEvent) => {
+      const nodeId: string = (evt.target as { id: string }).id;
+      setSelectedNode(nodeLookupRef.current.get(nodeId) ?? null);
+    };
+    const handleCanvasClick = () => setSelectedNode(null);
+    graph.on('node:click', handleNodeClick);
+    graph.on('canvas:click', handleCanvasClick);
     graphRef.current = graph;
     return () => {
+      graph.off('node:click', handleNodeClick);
+      graph.off('canvas:click', handleCanvasClick);
       graph.destroy();
       graphRef.current = undefined;
     };
@@ -353,15 +467,8 @@ export default function GraphView({ scene, data }: GraphViewProps) {
     graph.setOptions(options);
     graph
       .render()
-      .then(() => {
-        graph.on('node:click', (evt: IElementEvent) => {
-          const nodeId: string = (evt.target as { id: string }).id;
-          setSelectedNode(data.nodes.find((n) => n.id === nodeId) ?? null);
-        });
-        graph.on('canvas:click', () => setSelectedNode(null));
-      })
       .catch(() => {});
-  }, [options, data.nodes]);
+  }, [options]);
 
   const handleFitView = useCallback(() => graphRef.current?.fitView(), []);
   const handleReset = useCallback(() => {
@@ -407,8 +514,41 @@ export default function GraphView({ scene, data }: GraphViewProps) {
           {scene === 'sql' && (
             <Tag color="error" style={{ borderRadius: 4, margin: 0, fontSize: 11 }}>⚠ 红框节点有警告</Tag>
           )}
+          <Tag style={{ borderRadius: 4, margin: 0, fontSize: 11 }}>
+            节点 {displayData.nodes.length} / 边 {displayData.edges.length}
+          </Tag>
+          {fullGraphIsLarge && (
+            <Tag color="processing" style={{ borderRadius: 4, margin: 0, fontSize: 11 }}>
+              已启用性能模式
+            </Tag>
+          )}
+          {viewMode === 'summary' && (
+            <Tag color="gold" style={{ borderRadius: 4, margin: 0, fontSize: 11 }}>
+              摘要视图
+            </Tag>
+          )}
         </Space>
         <Space size={4}>
+          {supportsSummaryMode && (
+            <>
+              <Button
+                size="small"
+                style={{ fontSize: 11 }}
+                type={viewMode === 'summary' ? 'primary' : 'default'}
+                onClick={() => setViewMode('summary')}
+              >
+                摘要视图
+              </Button>
+              <Button
+                size="small"
+                style={{ fontSize: 11 }}
+                type={viewMode === 'full' ? 'primary' : 'default'}
+                onClick={() => setViewMode('full')}
+              >
+                完整视图
+              </Button>
+            </>
+          )}
           <Button size="small" style={{ fontSize: 11 }} icon={<ReloadOutlined />} onClick={handleReset}>重置</Button>
           <Button size="small" style={{ fontSize: 11 }} onClick={handleFitView}>自适应</Button>
           <Button
@@ -443,7 +583,9 @@ export default function GraphView({ scene, data }: GraphViewProps) {
         <Text type="secondary" style={{
           position: 'absolute', bottom: 8, right: 12, fontSize: 11, pointerEvents: 'none',
         }}>
-          拖拽移动 · 滚轮缩放 · 点击节点查看详情
+          {perfConfig.disableTooltip
+            ? '拖拽移动 · 滚轮缩放 · 点击节点查看详情'
+            : '拖拽移动 · 滚轮缩放 · 悬浮或点击节点查看详情'}
         </Text>
       </div>
 

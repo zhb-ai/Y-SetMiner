@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { Collapse, Descriptions, Space, Table, Tag, Tooltip, Typography } from 'antd'
 import type { TableColumnsType } from 'antd'
 import { InfoCircleOutlined } from '@ant-design/icons'
@@ -210,13 +211,13 @@ function BaseUnitSummary({ unit, extensionCount }: { unit: SolutionUnit; extensi
 }
 
 export function SqlUnitGroupsView({ groups }: SqlUnitGroupsViewProps) {
-  const extensionColumns = buildExtensionColumns()
+  const extensionColumns = useMemo(() => buildExtensionColumns(), [])
 
-  return (
-    <Collapse
-      defaultActiveKey={groups.map((group) => group.key)}
-      items={groups.map((group) => ({
-        key: group.key,
+  const panelItems = useMemo(
+    () => groups.map((group, index) => {
+      const panelKey = `${group.key}__${index}`
+      return {
+        key: panelKey,
         label: (
           <Space size={8} wrap>
             <Text strong>{group.group_name}</Text>
@@ -238,7 +239,7 @@ export function SqlUnitGroupsView({ groups }: SqlUnitGroupsViewProps) {
               size="small"
               scroll={{ x: 'max-content' }}
               dataSource={[group.base_unit]}
-              columns={buildExtensionColumns()}
+              columns={extensionColumns}
             />
           )
           : (
@@ -254,7 +255,20 @@ export function SqlUnitGroupsView({ groups }: SqlUnitGroupsViewProps) {
               />
             </Space>
           ),
-      }))}
+      }
+    }),
+    [extensionColumns, groups],
+  )
+
+  const defaultKeys = useMemo(
+    () => panelItems.map((item) => item.key),
+    [panelItems],
+  )
+
+  return (
+    <Collapse
+      defaultActiveKey={defaultKeys}
+      items={panelItems}
     />
   )
 }
