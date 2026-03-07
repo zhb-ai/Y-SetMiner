@@ -135,16 +135,24 @@ def build_extension_delta(
     dataset: SceneDataset,
     unit: dict[str, object],
     base_candidate: SqlBaseCandidate,
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str]]:
     base_sources = set(base_candidate.source_subset)
     extra_source_tables = sorted(set(get_real_unit_sources(dataset, unit)) - base_sources)
     base_items = set(base_candidate.shared_item_indices)
-    extra_item_names = [
-        dataset.items[item_idx].name
+    extra_item_indices = [
+        item_idx
         for item_idx in unit["item_indices"]
         if item_idx not in base_items
     ]
-    return extra_source_tables, extra_item_names
+    extra_item_names = [
+        dataset.items[item_idx].name
+        for item_idx in extra_item_indices
+    ]
+    extra_item_sources = [
+        str(dataset.items[item_idx].source or "")
+        for item_idx in extra_item_indices
+    ]
+    return extra_source_tables, extra_item_names, extra_item_sources
 
 
 def _pick_shared_items_for_subset(

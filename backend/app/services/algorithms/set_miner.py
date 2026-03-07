@@ -477,6 +477,7 @@ class SetMinerService:
                     "item_names": [items[item_idx].name for item_idx in item_indices],
                     "item_display_names": [items[item_idx].name for item_idx in item_indices],
                     "item_exprs": [items[item_idx].meta.get("original_expr", "") for item_idx in item_indices],
+                    "item_sources": [str(items[item_idx].source or "") for item_idx in item_indices],
                     "covered_entity_ids": [entities[e_idx].id for e_idx in entity_indices],
                     "covered_entity_names": [entities[e_idx].name for e_idx in entity_indices],
                     "score": unit["score"],
@@ -487,6 +488,7 @@ class SetMinerService:
                     "base_unit_id": unit.get("base_unit_id"),
                     "extra_source_tables": list(unit.get("extra_source_tables", [])),
                     "extra_item_names": list(unit.get("extra_item_names", [])),
+                    "extra_item_sources": list(unit.get("extra_item_sources", [])),
                     "added_parent_names": [items[item_idx].name for item_idx in unit.get("added_parent_indices", [])],
                     "hard_removed_names": [items[item_idx].name for item_idx in unit.get("hard_removed_indices", [])],
                     "soft_conflict_names": [
@@ -511,6 +513,7 @@ class SetMinerService:
             item_names=unit["item_names"],
             item_display_names=unit["item_display_names"],
             item_exprs=unit["item_exprs"],
+            item_sources=unit.get("item_sources", []),
             covered_entity_ids=unit["covered_entity_ids"],
             covered_entity_names=unit["covered_entity_names"],
             rationale=unit["rationale"],
@@ -520,6 +523,7 @@ class SetMinerService:
             base_unit_id=unit.get("base_unit_id"),
             extra_source_tables=list(unit.get("extra_source_tables", [])),
             extra_item_names=list(unit.get("extra_item_names", [])),
+            extra_item_sources=list(unit.get("extra_item_sources", [])),
         )
 
     def _build_sql_unit_groups(
@@ -542,6 +546,7 @@ class SetMinerService:
                     "base_unit_id": None,
                     "extra_source_tables": [],
                     "extra_item_names": [],
+                    "extra_item_sources": [],
                 }
                 standalone_units.append(updated)
                 standalone_groups.append(
@@ -585,7 +590,7 @@ class SetMinerService:
                 raw_unit = raw_by_id[member_id]
                 if self._get_unit_source_signature(dataset, raw_unit) != candidate.source_subset:
                     continue
-                extra_sources, extra_items = build_extension_delta(dataset, raw_unit, candidate)
+                extra_sources, extra_items, extra_item_sources = build_extension_delta(dataset, raw_unit, candidate)
                 if extra_sources or extra_items:
                     continue
 
@@ -596,6 +601,7 @@ class SetMinerService:
                     "base_unit_id": member_id,
                     "extra_source_tables": [],
                     "extra_item_names": [],
+                    "extra_item_sources": [],
                 }
                 updated["name"] = self._build_sql_unit_name(dataset, updated)
                 decorated_by_id[member_id] = updated
@@ -625,6 +631,7 @@ class SetMinerService:
                     "base_unit_id": None,
                     "extra_source_tables": [],
                     "extra_item_names": [],
+                    "extra_item_sources": [],
                 }
                 base_unit = self._decorate_units(dataset, matrix, [synthetic_base])[0]
                 base_unit_id = str(base_unit["id"])
@@ -634,7 +641,7 @@ class SetMinerService:
                 if member_id == base_unit_id:
                     continue
                 raw_unit = raw_by_id[member_id]
-                extra_sources, extra_items = build_extension_delta(dataset, raw_unit, candidate)
+                extra_sources, extra_items, extra_item_sources = build_extension_delta(dataset, raw_unit, candidate)
                 updated = {
                     **decorated_by_id[member_id],
                     "base_name": base_name,
@@ -642,6 +649,7 @@ class SetMinerService:
                     "base_unit_id": base_unit_id,
                     "extra_source_tables": extra_sources,
                     "extra_item_names": extra_items,
+                    "extra_item_sources": extra_item_sources,
                 }
                 updated["name"] = self._build_sql_unit_name(dataset, updated)
                 decorated_by_id[member_id] = updated
@@ -674,6 +682,7 @@ class SetMinerService:
                 "base_unit_id": None,
                 "extra_source_tables": [],
                 "extra_item_names": [],
+                "extra_item_sources": [],
             }
             standalone_unit["name"] = self._build_sql_unit_name(dataset, standalone_unit)
             decorated_by_id[unit_id] = standalone_unit

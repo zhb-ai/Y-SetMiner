@@ -33,6 +33,7 @@ export interface SolutionUnit {
   item_names: string[]
   item_display_names: string[]
   item_exprs: string[]
+  item_sources: string[]
   covered_entity_ids: string[]
   covered_entity_names: string[]
   rationale: string
@@ -42,6 +43,7 @@ export interface SolutionUnit {
   base_unit_id?: string | null
   extra_source_tables: string[]
   extra_item_names: string[]
+  extra_item_sources: string[]
 }
 
 export interface SqlUnitGroup {

@@ -10,6 +10,43 @@ interface SqlUnitGroupsViewProps {
   groups: SqlUnitGroup[]
 }
 
+function groupFieldsBySource(names: string[], sources: string[]) {
+  const grouped = new Map<string, string[]>()
+  names.forEach((name, idx) => {
+    const source = sources[idx] || 'unknown'
+    const existing = grouped.get(source) ?? []
+    existing.push(name)
+    grouped.set(source, existing)
+  })
+  return Array.from(grouped.entries())
+}
+
+function SourceGroupedFields({
+  names,
+  sources,
+}: {
+  names: string[]
+  sources: string[]
+}) {
+  const groups = groupFieldsBySource(names, sources)
+  if (groups.length === 0) {
+    return <Text type="secondary">无</Text>
+  }
+
+  return (
+    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+      {groups.map(([source, fieldNames]) => (
+        <div key={`${source}-${fieldNames.join('|')}`}>
+          <Text strong style={{ fontSize: 12 }}>{source}</Text>
+          <div style={{ marginTop: 4 }}>
+            <TagsCell items={fieldNames.map((name) => ({ name, expr: '' }))} />
+          </div>
+        </div>
+      ))}
+    </Space>
+  )
+}
+
 function buildExtensionColumns(): TableColumnsType<SolutionUnit> {
   return [
     {
@@ -44,7 +81,7 @@ function buildExtensionColumns(): TableColumnsType<SolutionUnit> {
       width: 360,
       render: (_: unknown, record: SolutionUnit) => (
         record.extra_item_names.length
-          ? <TagsCell items={record.extra_item_names.map((name) => ({ name, expr: '' }))} />
+          ? <SourceGroupedFields names={record.extra_item_names} sources={record.extra_item_sources} />
           : <Text type="secondary">无</Text>
       ),
     },
@@ -91,7 +128,7 @@ function BaseUnitSummary({ unit, extensionCount }: { unit: SolutionUnit; extensi
           : <Text type="secondary">无</Text>}
       </Descriptions.Item>
       <Descriptions.Item label="基础字段">
-        <TagsCell items={unit.item_display_names.map((name, idx) => ({ name, expr: unit.item_exprs[idx] ?? '' }))} />
+        <SourceGroupedFields names={unit.item_display_names} sources={unit.item_sources} />
       </Descriptions.Item>
     </Descriptions>
   )
