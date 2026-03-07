@@ -1,0 +1,10 @@
+user_id,user_name,permission_id,permission_name,permission_group,permission_type,permission_level,permission_path
+u101,赵敏,p101,销售看板,销售,menu,menu,销售管理/销售看板
+u101,赵敏,p102,客户列表,客户,menu,menu,客户管理/客户列表
+u102,周芷若,p101,销售看板,销售,menu,menu,销售管理/销售看板
+u102,周芷若,p103,订单查询,订单,menu,menu,订单管理/订单查询
+u103,张无忌,p101,销售看板,销售,menu,menu,销售管理/销售看板
+u103,张无忌,p102,客户列表,客户,menu,menu,客户管理/客户列表
+u103,张无忌,p103,订单查询,订单,menu,menu,订单管理/订单查询
+u104,杨逍,p104,库存查询,库存,menu,menu,库存管理/库存查询
+u104,杨逍,p105,采购查询,采购,menu,menu,采购管理/采购查询

@@ -1,0 +1,7 @@
+role_id,role_name,permission_id,permission_name,permission_group,permission_type,parent_permission_id,permission_level,sod_conflict_code,sod_conflict_level,permission_path
+r001,销售基础角色,p001,订单查询,订单,menu,,menu,,,订单管理/订单查询
+r001,销售基础角色,p002,订单创建,订单,button,p001,button,,,订单管理/订单查询/订单创建
+r001,销售基础角色,p004,客户查看,客户,menu,,menu,CUST_EDIT_VIEW,soft,客户管理/客户查看
+r002,销售主管角色,p001,订单查询,订单,menu,,menu,,,订单管理/订单查询
+r002,销售主管角色,p003,订单审核,订单,button,p001,button,ORDER_CREATE_AUDIT,hard,订单管理/订单查询/订单审核
+r002,销售主管角色,p005,客户编辑,客户,button,p004,button,CUST_EDIT_VIEW,soft,客户管理/客户查看/客户编辑

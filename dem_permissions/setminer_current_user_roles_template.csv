@@ -1,0 +1,4 @@
+user_id,user_name,role_id,role_name
+u001,张三,r001,销售基础角色
+u002,李四,r001,销售基础角色
+u003,王五,r002,销售主管角色

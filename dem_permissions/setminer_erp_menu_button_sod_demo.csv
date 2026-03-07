@@ -1,0 +1,15 @@
+user_id,user_name,permission_id,permission_name,permission_group,permission_type,parent_permission_id,permission_level,sod_conflict_code,sod_conflict_level,permission_path
+u201,陈晨,p201,订单查询,订单,menu,,menu,,,订单管理/订单查询
+u201,陈晨,p202,订单创建,订单,button,p201,button,ORDER_FLOW,soft,订单管理/订单查询/订单创建
+u201,陈晨,p204,客户查看,客户,menu,,menu,,,客户管理/客户查看
+u202,林雪,p201,订单查询,订单,menu,,menu,,,订单管理/订单查询
+u202,林雪,p203,订单审核,订单,button,p201,button,ORDER_FLOW,hard,订单管理/订单查询/订单审核
+u202,林雪,p204,客户查看,客户,menu,,menu,CUSTOMER_EDIT,soft,客户管理/客户查看
+u203,高峰,p205,客户编辑,客户,button,p204,button,CUSTOMER_EDIT,soft,客户管理/客户查看/客户编辑
+u203,高峰,p206,收款登记,财务,button,p207,button,FINANCE_SPLIT,hard,财务管理/收款管理/收款登记
+u203,高峰,p207,收款管理,财务,menu,,menu,,,财务管理/收款管理
+u204,王岚,p201,订单查询,订单,menu,,menu,,,订单管理/订单查询
+u204,王岚,p202,订单创建,订单,button,p201,button,ORDER_FLOW,soft,订单管理/订单查询/订单创建
+u204,王岚,p203,订单审核,订单,button,p201,button,ORDER_FLOW,hard,订单管理/订单查询/订单审核
+u205,李岩,p204,客户查看,客户,menu,,menu,CUSTOMER_EDIT,soft,客户管理/客户查看
+u205,李岩,p205,客户编辑,客户,button,p204,button,CUSTOMER_EDIT,soft,客户管理/客户查看/客户编辑

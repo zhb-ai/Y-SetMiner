@@ -1,0 +1,172 @@
+#root {
+  min-height: 100vh;
+}
+
+/* ===== Shell ===== */
+.app-shell {
+  min-height: 100vh;
+}
+
+/* ===== Header ===== */
+.app-header {
+  display: flex;
+  align-items: center;
+  background: #101828;
+  padding: 0 24px;
+  height: 52px;
+  line-height: 52px;
+}
+
+.header-inner {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.header-title {
+  color: #fff !important;
+  margin: 0 !important;
+  font-size: 18px !important;
+  line-height: 52px !important;
+}
+
+.header-subtitle {
+  color: rgba(255, 255, 255, 0.65) !important;
+  font-size: 12px;
+}
+
+/* ===== Sider ===== */
+.app-sider {
+  border-right: 1px solid #f0f0f0;
+  background: #fafafa !important;
+  overflow: hidden;
+}
+
+.sider-scroll {
+  height: calc(100vh - 52px);
+  overflow-y: auto;
+  padding: 12px 12px 24px;
+}
+
+/* ===== Ctrl cards in sider ===== */
+.ctrl-card .ant-card-body {
+  padding: 10px 12px;
+}
+
+.ctrl-card .ant-card-head {
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.ctrl-card-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* ===== Main content ===== */
+.app-content {
+  padding: 16px;
+  overflow-y: auto;
+  height: calc(100vh - 52px);
+  background: #f5f7fa;
+}
+
+.result-summary-card .ant-card-body {
+  padding: 14px 16px;
+}
+
+.result-summary-header {
+  border-bottom: 1px solid #f0f0f0;
+  padding-bottom: 8px;
+  margin-bottom: 4px;
+}
+
+.result-tabs-card .ant-card-body {
+  padding: 0 12px 12px;
+}
+
+.result-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  border: 1px dashed #d9d9d9;
+  border-radius: 8px;
+  background: #fff;
+}
+
+/* ===== Upload drop zone ===== */
+.upload-hint-block {
+  background: #f8f9fc;
+  border: 1px solid #e8eaf0;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.upload-drop-zone {
+  border: 1.5px dashed #d9d9d9;
+  border-radius: 8px;
+  background: #fafafa;
+  transition: border-color 0.2s, background 0.2s;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.upload-drop-zone:hover {
+  border-color: #1677ff;
+  background: #f0f5ff;
+}
+
+.upload-drop-zone--sm .upload-drop-placeholder,
+.upload-drop-zone--sm .upload-drop-selected {
+  padding: 8px 12px;
+}
+
+.upload-drop-label {
+  display: block;
+  cursor: pointer;
+  width: 100%;
+}
+
+.upload-drop-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 16px 12px;
+}
+
+.upload-drop-selected {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 12px;
+}
+
+.upload-drop-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #f6ffed;
+  border: 1px solid #b7eb8f;
+  color: #389e0d;
+  font-size: 12px;
+  margin-bottom: 2px;
+}
+
+/* ===== Diff collapse ===== */
+.diff-collapse.ant-collapse-ghost > .ant-collapse-item > .ant-collapse-header {
+  padding: 6px 0;
+  color: #595959;
+}
+
+.diff-collapse.ant-collapse-ghost > .ant-collapse-item > .ant-collapse-content > .ant-collapse-content-box {
+  padding: 8px 0 0;
+}

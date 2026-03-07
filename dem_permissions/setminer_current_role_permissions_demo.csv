@@ -1,0 +1,8 @@
+role_id,role_name,permission_id,permission_name,permission_group,permission_type,parent_permission_id,permission_level,sod_conflict_code,sod_conflict_level,permission_path
+r201,订单专员,p201,订单查询,订单,menu,,menu,,,订单管理/订单查询
+r201,订单专员,p202,订单创建,订单,button,p201,button,ORDER_FLOW,soft,订单管理/订单查询/订单创建
+r202,订单审批,p201,订单查询,订单,menu,,menu,,,订单管理/订单查询
+r202,订单审批,p203,订单审核,订单,button,p201,button,ORDER_FLOW,hard,订单管理/订单查询/订单审核
+r203,客户维护,p205,客户编辑,客户,button,p204,button,CUSTOMER_EDIT,soft,客户管理/客户查看/客户编辑
+r204,财务登记,p206,收款登记,财务,button,p207,button,FINANCE_SPLIT,hard,财务管理/收款管理/收款登记
+r204,财务登记,p207,收款管理,财务,menu,,menu,,,财务管理/收款管理
