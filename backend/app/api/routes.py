@@ -1,4 +1,4 @@
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, File, Form, UploadFile
 
 from app.schemas.solve import ImportPreviewResponse, SceneInfo, SolveRequest, SolveResponse
 from app.services.algorithms.set_miner import SetMinerService
@@ -54,11 +54,27 @@ async def solve_erp_users_permissions(
 
 
 @router.post("/import/sql/documents/preview", response_model=ImportPreviewResponse)
-async def preview_sql_documents(files: list[UploadFile] = File(...)) -> ImportPreviewResponse:
-    return await sql_importer.preview_uploads(files)
+async def preview_sql_documents(
+    files: list[UploadFile] = File(...),
+    base_field_threshold: float = Form(0.6),
+    suggested_field_threshold: float = Form(0.45),
+) -> ImportPreviewResponse:
+    return await sql_importer.preview_uploads(
+        files,
+        base_field_threshold=base_field_threshold,
+        suggested_field_threshold=suggested_field_threshold,
+    )
 
 
 @router.post("/import/sql/documents/solve", response_model=SolveResponse)
-async def solve_sql_documents(files: list[UploadFile] = File(...)) -> SolveResponse:
-    dataset = await sql_importer.solve_uploads(files)
+async def solve_sql_documents(
+    files: list[UploadFile] = File(...),
+    base_field_threshold: float = Form(0.6),
+    suggested_field_threshold: float = Form(0.45),
+) -> SolveResponse:
+    dataset = await sql_importer.solve_uploads(
+        files,
+        base_field_threshold=base_field_threshold,
+        suggested_field_threshold=suggested_field_threshold,
+    )
     return solver.solve(dataset)

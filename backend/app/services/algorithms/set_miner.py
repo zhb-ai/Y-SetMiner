@@ -24,6 +24,7 @@ from app.services.algorithms.sql_unit_hierarchy import (
     get_real_unit_source_counter,
     get_real_unit_sources,
     mine_sql_base_candidates,
+    _build_item_source_label,
 )
 from app.services.scenes.erp_importer import CurrentRoleState
 from app.services.scenes.erp_role_diff import ErpRoleDiffService
@@ -477,7 +478,7 @@ class SetMinerService:
                     "item_names": [items[item_idx].name for item_idx in item_indices],
                     "item_display_names": [items[item_idx].name for item_idx in item_indices],
                     "item_exprs": [items[item_idx].meta.get("original_expr", "") for item_idx in item_indices],
-                    "item_sources": [str(items[item_idx].source or "") for item_idx in item_indices],
+                    "item_sources": [_build_item_source_label(dataset, item_idx) for item_idx in item_indices],
                     "covered_entity_ids": [entities[e_idx].id for e_idx in entity_indices],
                     "covered_entity_names": [entities[e_idx].name for e_idx in entity_indices],
                     "score": unit["score"],
@@ -489,6 +490,12 @@ class SetMinerService:
                     "extra_source_tables": list(unit.get("extra_source_tables", [])),
                     "extra_item_names": list(unit.get("extra_item_names", [])),
                     "extra_item_sources": list(unit.get("extra_item_sources", [])),
+                    "suggested_item_names": list(unit.get("suggested_item_names", [])),
+                    "suggested_item_sources": list(unit.get("suggested_item_sources", [])),
+                    "suggested_item_hits": list(unit.get("suggested_item_hits", [])),
+                    "support_unit_count": unit.get("support_unit_count"),
+                    "base_field_min_hits": unit.get("base_field_min_hits"),
+                    "suggested_field_min_hits": unit.get("suggested_field_min_hits"),
                     "added_parent_names": [items[item_idx].name for item_idx in unit.get("added_parent_indices", [])],
                     "hard_removed_names": [items[item_idx].name for item_idx in unit.get("hard_removed_indices", [])],
                     "soft_conflict_names": [
@@ -524,6 +531,12 @@ class SetMinerService:
             extra_source_tables=list(unit.get("extra_source_tables", [])),
             extra_item_names=list(unit.get("extra_item_names", [])),
             extra_item_sources=list(unit.get("extra_item_sources", [])),
+            suggested_item_names=list(unit.get("suggested_item_names", [])),
+            suggested_item_sources=list(unit.get("suggested_item_sources", [])),
+            suggested_item_hits=list(unit.get("suggested_item_hits", [])),
+            support_unit_count=unit.get("support_unit_count"),
+            base_field_min_hits=unit.get("base_field_min_hits"),
+            suggested_field_min_hits=unit.get("suggested_field_min_hits"),
         )
 
     def _build_sql_unit_groups(
@@ -535,7 +548,13 @@ class SetMinerService:
         if not units:
             return units, []
 
-        candidates = mine_sql_base_candidates(dataset, units)
+        candidates = mine_sql_base_candidates(
+            dataset,
+            units,
+            min_shared_items=dataset.constraints.min_shared_items,
+            item_frequency_threshold=dataset.constraints.base_field_threshold,
+            suggested_item_frequency_threshold=dataset.constraints.suggested_field_threshold,
+        )
         if not candidates:
             standalone_units = []
             standalone_groups = []
@@ -547,6 +566,12 @@ class SetMinerService:
                     "extra_source_tables": [],
                     "extra_item_names": [],
                     "extra_item_sources": [],
+                    "suggested_item_names": [],
+                    "suggested_item_sources": [],
+                    "suggested_item_hits": [],
+                    "support_unit_count": None,
+                    "base_field_min_hits": None,
+                    "suggested_field_min_hits": None,
                 }
                 standalone_units.append(updated)
                 standalone_groups.append(
@@ -602,6 +627,12 @@ class SetMinerService:
                     "extra_source_tables": [],
                     "extra_item_names": [],
                     "extra_item_sources": [],
+                    "suggested_item_names": [dataset.items[item_idx].name for item_idx in candidate.suggested_item_indices],
+                    "suggested_item_sources": [_build_item_source_label(dataset, item_idx) for item_idx in candidate.suggested_item_indices],
+                    "suggested_item_hits": list(candidate.suggested_item_hits),
+                    "support_unit_count": candidate.support_unit_count,
+                    "base_field_min_hits": candidate.base_field_min_hits,
+                    "suggested_field_min_hits": candidate.suggested_field_min_hits,
                 }
                 updated["name"] = self._build_sql_unit_name(dataset, updated)
                 decorated_by_id[member_id] = updated
@@ -632,6 +663,12 @@ class SetMinerService:
                     "extra_source_tables": [],
                     "extra_item_names": [],
                     "extra_item_sources": [],
+                    "suggested_item_names": [dataset.items[item_idx].name for item_idx in candidate.suggested_item_indices],
+                    "suggested_item_sources": [_build_item_source_label(dataset, item_idx) for item_idx in candidate.suggested_item_indices],
+                    "suggested_item_hits": list(candidate.suggested_item_hits),
+                    "support_unit_count": candidate.support_unit_count,
+                    "base_field_min_hits": candidate.base_field_min_hits,
+                    "suggested_field_min_hits": candidate.suggested_field_min_hits,
                 }
                 base_unit = self._decorate_units(dataset, matrix, [synthetic_base])[0]
                 base_unit_id = str(base_unit["id"])
@@ -650,6 +687,12 @@ class SetMinerService:
                     "extra_source_tables": extra_sources,
                     "extra_item_names": extra_items,
                     "extra_item_sources": extra_item_sources,
+                    "suggested_item_names": [],
+                    "suggested_item_sources": [],
+                    "suggested_item_hits": [],
+                    "support_unit_count": None,
+                    "base_field_min_hits": None,
+                    "suggested_field_min_hits": None,
                 }
                 updated["name"] = self._build_sql_unit_name(dataset, updated)
                 decorated_by_id[member_id] = updated
@@ -683,6 +726,12 @@ class SetMinerService:
                 "extra_source_tables": [],
                 "extra_item_names": [],
                 "extra_item_sources": [],
+                "suggested_item_names": [],
+                "suggested_item_sources": [],
+                "suggested_item_hits": [],
+                "support_unit_count": None,
+                "base_field_min_hits": None,
+                "suggested_field_min_hits": None,
             }
             standalone_unit["name"] = self._build_sql_unit_name(dataset, standalone_unit)
             decorated_by_id[unit_id] = standalone_unit

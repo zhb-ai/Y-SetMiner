@@ -183,3 +183,26 @@
 .diff-collapse.ant-collapse-ghost > .ant-collapse-item > .ant-collapse-content > .ant-collapse-content-box {
   padding: 8px 0 0;
 }
+
+.sql-settings-collapse {
+  background: #f8fbff;
+  border: 1px solid #e6f4ff;
+  border-radius: 8px;
+}
+
+.sql-settings-collapse.ant-collapse > .ant-collapse-item {
+  border-bottom: none;
+}
+
+.sql-settings-collapse.ant-collapse-ghost > .ant-collapse-item > .ant-collapse-header {
+  padding: 10px 12px;
+}
+
+.sql-settings-collapse.ant-collapse > .ant-collapse-item > .ant-collapse-content > .ant-collapse-content-box {
+  padding: 0 12px 12px;
+}
+
+.sql-settings-collapse .ant-collapse-expand-icon {
+  color: #1677ff;
+  font-size: 12px;
+}

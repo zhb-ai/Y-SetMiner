@@ -44,6 +44,12 @@ export interface SolutionUnit {
   extra_source_tables: string[]
   extra_item_names: string[]
   extra_item_sources: string[]
+  suggested_item_names: string[]
+  suggested_item_sources: string[]
+  suggested_item_hits: number[]
+  support_unit_count?: number | null
+  base_field_min_hits?: number | null
+  suggested_field_min_hits?: number | null
 }
 
 export interface SqlUnitGroup {

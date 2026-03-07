@@ -2,6 +2,11 @@ import axios from 'axios'
 
 import type { ImportPreviewResponse, SceneInfo, SceneKey, SolveResponse } from '../types/api'
 
+interface SqlThresholdOptions {
+  baseFieldThreshold: number
+  suggestedFieldThreshold: number
+}
+
 const client = axios.create({
   baseURL: '/api',
   timeout: 120000,
@@ -41,16 +46,24 @@ export async function solveErpFile(
   return data
 }
 
-export async function previewSqlFiles(files: File[]) {
+export async function previewSqlFiles(files: File[], options?: SqlThresholdOptions) {
   const formData = new FormData()
   files.forEach((file) => formData.append('files', file))
+  if (options) {
+    formData.append('base_field_threshold', String(options.baseFieldThreshold))
+    formData.append('suggested_field_threshold', String(options.suggestedFieldThreshold))
+  }
   const { data } = await client.post<ImportPreviewResponse>('/import/sql/documents/preview', formData)
   return data
 }
 
-export async function solveSqlFiles(files: File[]) {
+export async function solveSqlFiles(files: File[], options?: SqlThresholdOptions) {
   const formData = new FormData()
   files.forEach((file) => formData.append('files', file))
+  if (options) {
+    formData.append('base_field_threshold', String(options.baseFieldThreshold))
+    formData.append('suggested_field_threshold', String(options.suggestedFieldThreshold))
+  }
   const { data } = await client.post<SolveResponse>('/import/sql/documents/solve', formData)
   return data
 }

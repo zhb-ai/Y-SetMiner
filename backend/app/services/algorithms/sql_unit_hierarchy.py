@@ -17,6 +17,11 @@ class SqlBaseCandidate:
     exact_match_unit_ids: list[str]
     extension_unit_ids: list[str]
     extension_signatures: list[tuple[str, ...]]
+    suggested_item_indices: list[int]
+    suggested_item_hits: list[int]
+    support_unit_count: int
+    base_field_min_hits: int
+    suggested_field_min_hits: int
 
 
 def get_real_unit_sources(dataset: SceneDataset, unit: dict[str, object]) -> tuple[str, ...]:
@@ -40,6 +45,7 @@ def mine_sql_base_candidates(
     min_subset_size: int = 2,
     min_shared_items: int = 4,
     item_frequency_threshold: float = 0.6,
+    suggested_item_frequency_threshold: float = 0.45,
 ) -> list[SqlBaseCandidate]:
     subset_support: dict[tuple[str, ...], list[int]] = defaultdict(list)
     unit_source_signatures = [get_real_unit_sources(dataset, unit) for unit in units]
@@ -75,15 +81,25 @@ def mine_sql_base_candidates(
                 if unit_source_signatures[idx] != source_subset
             }
         )
-        shared_item_indices = _pick_shared_items_for_subset(
+        item_frequency, support_count = _build_subset_item_frequency(
             dataset,
             support_units,
             source_subset,
-            item_frequency_threshold=item_frequency_threshold,
         )
+        base_field_min_hits = max(2, ceil(support_count * item_frequency_threshold))
+        suggested_field_min_hits = max(2, ceil(support_count * suggested_item_frequency_threshold))
+        shared_item_indices = _select_item_indices_by_hits(item_frequency, base_field_min_hits)
         required_shared_items = _get_min_shared_items_for_subset(len(source_subset), min_shared_items)
         if len(shared_item_indices) < required_shared_items:
             continue
+        suggested_candidates = [
+            (item_idx, hits)
+            for item_idx, hits in item_frequency.items()
+            if suggested_field_min_hits <= hits < base_field_min_hits
+        ]
+        suggested_candidates.sort(key=lambda item: (-item[1], item[0]))
+        suggested_item_indices = [item_idx for item_idx, _ in suggested_candidates]
+        suggested_item_hits = [hits for _, hits in suggested_candidates]
 
         avg_extra_sources = sum(
             max(len(unit_source_signatures[idx]) - len(source_subset), 0)
@@ -111,6 +127,11 @@ def mine_sql_base_candidates(
                 exact_match_unit_ids=exact_match_unit_ids,
                 extension_unit_ids=extension_unit_ids,
                 extension_signatures=extension_signatures,
+                suggested_item_indices=suggested_item_indices,
+                suggested_item_hits=suggested_item_hits,
+                support_unit_count=support_count,
+                base_field_min_hits=base_field_min_hits,
+                suggested_field_min_hits=suggested_field_min_hits,
             )
         )
 
@@ -149,19 +170,17 @@ def build_extension_delta(
         for item_idx in extra_item_indices
     ]
     extra_item_sources = [
-        str(dataset.items[item_idx].source or "")
+        _build_item_source_label(dataset, item_idx)
         for item_idx in extra_item_indices
     ]
     return extra_source_tables, extra_item_names, extra_item_sources
 
 
-def _pick_shared_items_for_subset(
+def _build_subset_item_frequency(
     dataset: SceneDataset,
     support_units: list[dict[str, object]],
     source_subset: tuple[str, ...],
-    *,
-    item_frequency_threshold: float,
-) -> list[int]:
+) -> tuple[Counter[int], int]:
     source_filter = set(source_subset)
     item_frequency: Counter[int] = Counter()
     for unit in support_units:
@@ -171,14 +190,11 @@ def _pick_shared_items_for_subset(
             if dataset.items[item_idx].source in source_filter
         }
         item_frequency.update(unit_subset_items)
+    return item_frequency, len(support_units)
 
-    support_count = len(support_units)
-    min_hits = max(2, ceil(support_count * item_frequency_threshold))
-    selected = [
-        item_idx
-        for item_idx, freq in item_frequency.items()
-        if freq >= min_hits
-    ]
+
+def _select_item_indices_by_hits(item_frequency: Counter[int], min_hits: int) -> list[int]:
+    selected = [item_idx for item_idx, freq in item_frequency.items() if freq >= min_hits]
     selected.sort(key=lambda item_idx: (-item_frequency[item_idx], item_idx))
     return selected
 
@@ -199,3 +215,12 @@ def _candidate_priority_key(candidate: SqlBaseCandidate) -> tuple[int, int, int,
         -candidate.score,
         -len(candidate.shared_item_indices),
     )
+
+
+def _build_item_source_label(dataset: SceneDataset, item_idx: int) -> str:
+    item = dataset.items[item_idx]
+    source = str(item.source or "").strip()
+    original_expr = str(item.meta.get("original_expr", "")).strip()
+    if source == "derived" and original_expr:
+        return original_expr
+    return source or "unknown"

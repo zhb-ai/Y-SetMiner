@@ -476,6 +476,48 @@ class SetMinerServiceSqlUnitTests(unittest.TestCase):
         self.assertTrue(any(unit["name"] == "table_a+table_b扩展宽表(+table_c)" for unit in groups[0]["units"]))
         self.assertEqual({unit["unit_level"] for unit in final_units}, {"extension"})
 
+    def test_build_sql_unit_groups_exposes_suggested_fields_by_threshold(self) -> None:
+        dataset = SceneDataset(
+            scene="sql",
+            entities=[
+                Entity(id="sql_1", name="sql_1.sql"),
+                Entity(id="sql_2", name="sql_2.sql"),
+                Entity(id="sql_3", name="sql_3.sql"),
+                Entity(id="sql_4", name="sql_4.sql"),
+            ],
+            items=[
+                Item(id="a::id", name="id", group="table_a", source="table_a"),
+                Item(id="a::name", name="name", group="table_a", source="table_a"),
+                Item(id="b::id", name="biz_id", group="table_b", source="table_b"),
+                Item(id="b::name", name="biz_name", group="table_b", source="table_b"),
+                Item(id="b::sub", name="sub_class", group="table_b", source="table_b"),
+                Item(id="c::flag", name="c_flag", group="table_c", source="table_c"),
+                Item(id="d::flag", name="d_flag", group="table_d", source="table_d"),
+                Item(id="e::flag", name="e_flag", group="table_e", source="table_e"),
+            ],
+            relations=[],
+            constraints=ConstraintConfig(max_items_per_unit=20, max_units_per_entity=3),
+        )
+        dataset.constraints.base_field_threshold = 0.75
+        dataset.constraints.suggested_field_threshold = 0.5
+        units = [
+            {"id": "unit-c1", "item_indices": [0, 1, 2, 3, 4, 5], "entity_indices": [0], "score": 6.0},
+            {"id": "unit-d", "item_indices": [0, 1, 2, 3, 4, 6], "entity_indices": [1], "score": 6.0},
+            {"id": "unit-e", "item_indices": [0, 1, 2, 3, 7], "entity_indices": [2], "score": 5.0},
+            {"id": "unit-c2", "item_indices": [0, 1, 2, 3, 5], "entity_indices": [3], "score": 5.0},
+        ]
+
+        decorated = self.service._decorate_units(dataset, self._matrix(4, 8), units)
+        _, groups = self.service._build_sql_unit_groups(dataset, self._matrix(4, 8), decorated)
+
+        base_unit = groups[0]["base_unit"]
+        self.assertEqual(base_unit["support_unit_count"], 4)
+        self.assertEqual(base_unit["base_field_min_hits"], 3)
+        self.assertEqual(base_unit["suggested_field_min_hits"], 2)
+        self.assertEqual(base_unit["suggested_item_names"], ["sub_class"])
+        self.assertEqual(base_unit["suggested_item_sources"], ["table_b"])
+        self.assertEqual(base_unit["suggested_item_hits"], [2])
+
     @staticmethod
     def _matrix(rows: int, cols: int):
         import numpy as np

@@ -34,6 +34,8 @@ class ConstraintConfig(BaseModel):
     max_units_per_entity: int = 3
     similarity_threshold: float = 0.6
     min_shared_items: int = 2
+    base_field_threshold: float = 0.6
+    suggested_field_threshold: float = 0.45
 
 
 class SceneDataset(BaseModel):
@@ -94,6 +96,12 @@ class SolutionUnit(BaseModel):
     extra_source_tables: list[str] = Field(default_factory=list)
     extra_item_names: list[str] = Field(default_factory=list)
     extra_item_sources: list[str] = Field(default_factory=list)
+    suggested_item_names: list[str] = Field(default_factory=list)
+    suggested_item_sources: list[str] = Field(default_factory=list)
+    suggested_item_hits: list[int] = Field(default_factory=list)
+    support_unit_count: int | None = None
+    base_field_min_hits: int | None = None
+    suggested_field_min_hits: int | None = None
 
 
 class SqlUnitGroup(BaseModel):

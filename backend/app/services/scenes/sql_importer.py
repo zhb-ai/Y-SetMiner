@@ -56,9 +56,20 @@ class SqlImportService:
         normalized = self._normalize_identifier(value)
         return normalized or None
 
-    async def preview_uploads(self, files: list[UploadFile]) -> ImportPreviewResponse:
+    async def preview_uploads(
+        self,
+        files: list[UploadFile],
+        *,
+        base_field_threshold: float = 0.6,
+        suggested_field_threshold: float = 0.45,
+    ) -> ImportPreviewResponse:
         documents, import_warnings = await self._parse_uploads(files)
-        dataset = self._build_dataset(documents, import_warnings=import_warnings)
+        dataset = self._build_dataset(
+            documents,
+            import_warnings=import_warnings,
+            base_field_threshold=base_field_threshold,
+            suggested_field_threshold=suggested_field_threshold,
+        )
         warnings = import_warnings + self._build_warnings(documents, dataset)
         return ImportPreviewResponse(
             scene="sql",
@@ -75,9 +86,20 @@ class SqlImportService:
             warnings=warnings,
         )
 
-    async def solve_uploads(self, files: list[UploadFile]) -> SceneDataset:
+    async def solve_uploads(
+        self,
+        files: list[UploadFile],
+        *,
+        base_field_threshold: float = 0.6,
+        suggested_field_threshold: float = 0.45,
+    ) -> SceneDataset:
         documents, import_warnings = await self._parse_uploads(files)
-        return self._build_dataset(documents, import_warnings=import_warnings)
+        return self._build_dataset(
+            documents,
+            import_warnings=import_warnings,
+            base_field_threshold=base_field_threshold,
+            suggested_field_threshold=suggested_field_threshold,
+        )
 
     async def _parse_uploads(self, files: list[UploadFile]) -> tuple[list[ParsedSqlDocument], list[str]]:
         if not files:
@@ -930,6 +952,9 @@ class SqlImportService:
         self,
         documents: list[ParsedSqlDocument],
         import_warnings: list[str] | None = None,
+        *,
+        base_field_threshold: float = 0.6,
+        suggested_field_threshold: float = 0.45,
     ) -> SceneDataset:
         entities = [Entity(id=f"sql_{idx + 1}", name=document.name) for idx, document in enumerate(documents)]
 
@@ -992,7 +1017,15 @@ class SqlImportService:
             entities=entities,
             items=list(item_map.values()),
             relations=relations,
-            constraints=ConstraintConfig(max_items_per_unit=20, max_units_per_entity=3),
+            constraints=ConstraintConfig(
+                max_items_per_unit=20,
+                max_units_per_entity=3,
+                base_field_threshold=max(min(base_field_threshold, 1.0), 0.0),
+                suggested_field_threshold=min(
+                    max(min(suggested_field_threshold, 1.0), 0.0),
+                    max(min(base_field_threshold, 1.0), 0.0),
+                ),
+            ),
             meta={
                 "import_warnings": list(import_warnings or []),
                 "join_graph": join_graph,              # {table: {neighbor: [edge_info, ...]}}

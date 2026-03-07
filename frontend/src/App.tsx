@@ -6,6 +6,7 @@ import {
   Col,
   Collapse,
   Descriptions,
+  InputNumber,
   List,
   Radio,
   Row,
@@ -16,7 +17,7 @@ import {
   Tooltip,
   Typography,
 } from 'antd'
-import { CheckCircleOutlined, InfoCircleOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons'
+import { CheckCircleOutlined, InfoCircleOutlined, ReloadOutlined, SettingOutlined, UploadOutlined } from '@ant-design/icons'
 
 import './App.css'
 import { AssignmentsTable } from './components/AssignmentsTable'
@@ -127,6 +128,8 @@ function App() {
   const [sqlFiles, setSqlFiles] = useState<File[]>([])
   const [currentRoleFile, setCurrentRoleFile] = useState<File | null>(null)
   const [currentUserRoleFile, setCurrentUserRoleFile] = useState<File | null>(null)
+  const [sqlBaseFieldThresholdPct, setSqlBaseFieldThresholdPct] = useState(60)
+  const [sqlSuggestedFieldThresholdPct, setSqlSuggestedFieldThresholdPct] = useState(45)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // 按钮状态：idle = 未分析/已换文件，done = 分析完成
@@ -134,6 +137,30 @@ function App() {
   const [diffAnalyzeStatus, setDiffAnalyzeStatus] = useState<'idle' | 'done'>('idle')
 
   const result = results[scene] ?? null
+  const sqlThresholdOptions = useMemo(() => ({
+    baseFieldThreshold: sqlBaseFieldThresholdPct / 100,
+    suggestedFieldThreshold: Math.min(sqlSuggestedFieldThresholdPct, sqlBaseFieldThresholdPct) / 100,
+  }), [sqlBaseFieldThresholdPct, sqlSuggestedFieldThresholdPct])
+
+  function clampPercent(value: number, min: number, max: number) {
+    return Math.max(min, Math.min(max, Math.round(value)))
+  }
+
+  function adjustBaseThreshold(delta: number) {
+    setSqlBaseFieldThresholdPct((prev) => {
+      const nextValue = clampPercent(prev + delta, 1, 100)
+      setSqlSuggestedFieldThresholdPct((current) => Math.min(current, nextValue))
+      return nextValue
+    })
+    setPreview(null)
+    setAnalyzeStatus('idle')
+  }
+
+  function adjustSuggestedThreshold(delta: number) {
+    setSqlSuggestedFieldThresholdPct((prev) => clampPercent(prev + delta, 1, sqlBaseFieldThresholdPct))
+    setPreview(null)
+    setAnalyzeStatus('idle')
+  }
 
   useEffect(() => {
     async function bootstrap() {
@@ -201,7 +228,7 @@ function App() {
     try {
       const previewData = scene === 'erp'
         ? await previewErpFile(selectedFile as File)
-        : await previewSqlFiles(sqlFiles)
+        : await previewSqlFiles(sqlFiles, sqlThresholdOptions)
       setPreview(previewData)
     } catch {
       setError(scene === 'erp' ? '文件预校验失败，请检查列名和文件格式。' : 'SQL 文件预校验失败，请检查文件格式。')
@@ -215,7 +242,7 @@ function App() {
     try {
       const solved = scene === 'erp'
         ? await solveErpFile(selectedFile as File)
-        : await solveSqlFiles(sqlFiles)
+        : await solveSqlFiles(sqlFiles, sqlThresholdOptions)
       setResults(prev => ({ ...prev, [scene]: solved }))
       setAnalyzeStatus('done')
     } catch (err: unknown) {
@@ -514,6 +541,93 @@ function App() {
             <Text style={{ fontSize: 12, color: '#595959' }}>
               支持多个 <Text code style={{ fontSize: 11 }}>.sql</Text> / <Text code style={{ fontSize: 11 }}>.txt</Text> 文件，系统自动提取字段、来源表和 JOIN 线索。
             </Text>
+            <Collapse
+              size="small"
+              ghost
+              className="sql-settings-collapse"
+              expandIconPosition="end"
+              items={[{
+                key: 'sql-thresholds',
+                label: (
+                  <Space size={8}>
+                    <SettingOutlined style={{ color: '#1677ff' }} />
+                    <span style={{ fontSize: 12, fontWeight: 600, color: '#262626' }}>高级设置</span>
+                    <Text style={{ fontSize: 11, color: '#8c8c8c' }}>基础字段 / 建议字段阈值</Text>
+                  </Space>
+                ),
+                children: (
+                  <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                    <div>
+                      <Space size={4} style={{ marginBottom: 6 }}>
+                        <Text style={{ fontSize: 12, color: '#595959' }}>
+                          基础字段阈值
+                        </Text>
+                        <Tooltip title="达到该频次比例时，字段才会进入基础宽表。">
+                          <InfoCircleOutlined style={{ fontSize: 12, color: '#8c8c8c', cursor: 'pointer' }} />
+                        </Tooltip>
+                      </Space>
+                      <Space align="center" size={8}>
+                        <div
+                          onWheel={(event) => {
+                            event.preventDefault()
+                            if (loading) return
+                            adjustBaseThreshold(event.deltaY < 0 ? 1 : -1)
+                          }}
+                        >
+                          <InputNumber
+                            min={1}
+                            max={100}
+                            value={sqlBaseFieldThresholdPct}
+                            addonAfter="%"
+                            disabled={loading}
+                            onChange={(value) => {
+                              const nextValue = clampPercent(Number(value ?? 60), 1, 100)
+                              setSqlBaseFieldThresholdPct(nextValue)
+                              setSqlSuggestedFieldThresholdPct((prev) => Math.min(prev, nextValue))
+                              setPreview(null)
+                              setAnalyzeStatus('idle')
+                            }}
+                          />
+                        </div>
+                      </Space>
+                    </div>
+                    <div>
+                      <Space size={4} style={{ marginBottom: 6 }}>
+                        <Text style={{ fontSize: 12, color: '#595959' }}>
+                          建议字段阈值
+                        </Text>
+                        <Tooltip title="未进入基础宽表，但达到该频次比例时，会作为建议补充字段展示。">
+                          <InfoCircleOutlined style={{ fontSize: 12, color: '#8c8c8c', cursor: 'pointer' }} />
+                        </Tooltip>
+                      </Space>
+                      <Space align="center" size={8}>
+                        <div
+                          onWheel={(event) => {
+                            event.preventDefault()
+                            if (loading) return
+                            adjustSuggestedThreshold(event.deltaY < 0 ? 1 : -1)
+                          }}
+                        >
+                          <InputNumber
+                            min={1}
+                            max={sqlBaseFieldThresholdPct}
+                            value={sqlSuggestedFieldThresholdPct}
+                            addonAfter="%"
+                            disabled={loading}
+                            onChange={(value) => {
+                              const nextValue = clampPercent(Number(value ?? 45), 1, sqlBaseFieldThresholdPct)
+                              setSqlSuggestedFieldThresholdPct(Math.min(nextValue, sqlBaseFieldThresholdPct))
+                              setPreview(null)
+                              setAnalyzeStatus('idle')
+                            }}
+                          />
+                        </div>
+                      </Space>
+                    </div>
+                  </Space>
+                ),
+              }]}
+            />
             <div className="upload-drop-zone" style={loading ? { opacity: 0.45, pointerEvents: 'none' } : {}}>
               <label className="upload-drop-label">
                 <input
