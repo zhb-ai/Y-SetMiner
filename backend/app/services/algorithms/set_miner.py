@@ -12,12 +12,20 @@ from app.schemas.solve import (
     ConstraintIssue,
     ErpConstraintReport,
     SceneDataset,
+    SqlUnitGroup,
     SolveResponse,
     SolutionUnit,
     SummaryMetric,
 )
 from app.services.graph.graph_builder import build_erp_graph, build_sql_graph
 from app.services.matrix.builder import build_matrix
+from app.services.algorithms.sql_unit_hierarchy import (
+    build_extension_delta,
+    choose_base_candidate_for_unit,
+    get_real_unit_source_counter,
+    get_real_unit_sources,
+    mine_sql_base_candidates,
+)
 from app.services.scenes.erp_importer import CurrentRoleState
 from app.services.scenes.erp_role_diff import ErpRoleDiffService
 
@@ -42,6 +50,11 @@ class SetMinerService:
         constraint_context = self._build_erp_constraint_context(dataset, matrix) if dataset.scene == "erp" else None
 
         selected_units = self._select_units(dataset, matrix, {}, constraint_context=constraint_context)
+        selected_units = self._decorate_units(dataset, matrix, selected_units)
+        sql_unit_groups = None
+        if dataset.scene == "sql":
+            selected_units, sql_unit_groups = self._build_sql_unit_groups(dataset, matrix, selected_units)
+
         assignments = self._build_assignments(bundle, matrix, selected_units)
 
         n_entities = len(bundle.entity_ids)
@@ -59,7 +72,7 @@ class SetMinerService:
         summary = [
             SummaryMetric(
                 label="推荐组合数",
-                value=str(len(selected_units)),
+                value=str(len(sql_unit_groups) if dataset.scene == "sql" and sql_unit_groups else len(selected_units)),
                 hint="ERP 对应角色数，SQL 对应宽表数。",
             ),
             SummaryMetric(
@@ -82,33 +95,28 @@ class SetMinerService:
         scene_title = "ERP 推荐角色方案" if dataset.scene == "erp" else "SQL 推荐宽表方案"
         unit_type = "角色" if dataset.scene == "erp" else "宽表"
         warnings = self._build_warnings(dataset, assignments, selected_units)
-        insights = self._build_insights(dataset, selected_units, item_lookup, unit_type)
+        insights = self._build_insights(dataset, selected_units, item_lookup, unit_type, sql_unit_groups)
         constraint_report = self._build_erp_constraint_report(dataset, selected_units) if dataset.scene == "erp" else None
 
         response = SolveResponse(
             scene=dataset.scene,
             title=scene_title,
             summary=summary,
-            units=[
-                SolutionUnit(
-                    id=unit["id"],
-                    name=unit["name"],
-                    unit_type=unit_type,
-                    item_ids=unit["item_ids"],
-                    item_names=unit["item_names"],
-                    item_display_names=unit["item_display_names"],
-                    item_exprs=unit["item_exprs"],
-                    covered_entity_ids=unit["covered_entity_ids"],
-                    covered_entity_names=unit["covered_entity_names"],
-                    rationale=unit["rationale"],
-                    score=unit["score"],
-                    sources=unit["sources"],
-                )
-                for unit in selected_units
-            ],
+            units=[self._to_solution_unit_model(unit, unit_type) for unit in selected_units],
             assignments=assignments,
             warnings=warnings,
             insights=insights,
+            sql_unit_groups=[
+                SqlUnitGroup(
+                    key=group["key"],
+                    group_name=group["group_name"],
+                    base_unit=self._to_solution_unit_model(group["base_unit"], unit_type),
+                    units=[self._to_solution_unit_model(unit, unit_type) for unit in group["units"]],
+                )
+                for group in sql_unit_groups
+            ]
+            if sql_unit_groups
+            else None,
             erp_role_diff=None,
             erp_constraint_report=constraint_report,
         )
@@ -296,41 +304,46 @@ class SetMinerService:
         if dataset.scene == "sql":
             selected_units = self._merge_similar_sql_units(dataset, matrix, selected_units)
 
-        return self._decorate_units(dataset, matrix, selected_units)
+        return selected_units
 
     def _get_unit_source_counter(
         self,
         dataset: SceneDataset,
         unit: dict[str, object],
     ) -> Counter[str]:
-        unit_items = [dataset.items[item_idx] for item_idx in unit["item_indices"]]
-        return Counter(
-            item.group
-            for item in unit_items
-            if item.group and item.group != "unknown"
-        )
+        return get_real_unit_source_counter(dataset, unit)
 
     def _get_unit_source_signature(
         self,
         dataset: SceneDataset,
         unit: dict[str, object],
     ) -> tuple[str, ...]:
-        return tuple(sorted(self._get_unit_source_counter(dataset, unit).keys()))
+        return get_real_unit_sources(dataset, unit)
 
     def _build_sql_unit_name(
         self,
         dataset: SceneDataset,
         unit: dict[str, object],
-        index: int,
+        index: int | None = None,
     ) -> str:
+        unit_level = unit.get("unit_level")
+        base_name = str(unit.get("base_name") or "")
+        if unit_level == "base" and base_name:
+            return f"{base_name}基础宽表"
+        if unit_level == "extension" and base_name:
+            extra_sources = list(unit.get("extra_source_tables", []))
+            if extra_sources:
+                return f"{base_name}扩展宽表(+{'+'.join(extra_sources)})"
+            return f"{base_name}扩展宽表(+字段扩展)"
+
         source_signature = self._get_unit_source_signature(dataset, unit)
         if not source_signature:
-            return f"通用宽表{index}"
+            return f"通用宽表{index or 1}"
 
         canonical_name = "+".join(source_signature)
         if len(source_signature) == 1:
-            return f"{canonical_name}宽表{index}"
-        return f"{canonical_name}组合宽表{index}"
+            return f"{canonical_name}宽表{index or 1}"
+        return f"{canonical_name}组合宽表{index or 1}"
 
     def _should_merge_sql_units(
         self,
@@ -470,6 +483,11 @@ class SetMinerService:
                     "score": unit["score"],
                     "rationale": rationale,
                     "sources": sources,
+                    "base_name": unit.get("base_name"),
+                    "unit_level": unit.get("unit_level", "standalone"),
+                    "base_unit_id": unit.get("base_unit_id"),
+                    "extra_source_tables": list(unit.get("extra_source_tables", [])),
+                    "extra_item_names": list(unit.get("extra_item_names", [])),
                     "added_parent_names": [items[item_idx].name for item_idx in unit.get("added_parent_indices", [])],
                     "hard_removed_names": [items[item_idx].name for item_idx in unit.get("hard_removed_indices", [])],
                     "soft_conflict_names": [
@@ -484,6 +502,206 @@ class SetMinerService:
             reverse=True,
         )
         return decorated
+
+    def _to_solution_unit_model(self, unit: dict[str, object], unit_type: str) -> SolutionUnit:
+        return SolutionUnit(
+            id=unit["id"],
+            name=unit["name"],
+            unit_type=unit_type,
+            item_ids=unit["item_ids"],
+            item_names=unit["item_names"],
+            item_display_names=unit["item_display_names"],
+            item_exprs=unit["item_exprs"],
+            covered_entity_ids=unit["covered_entity_ids"],
+            covered_entity_names=unit["covered_entity_names"],
+            rationale=unit["rationale"],
+            score=unit["score"],
+            sources=unit["sources"],
+            unit_level=unit.get("unit_level", "standalone"),
+            base_unit_id=unit.get("base_unit_id"),
+            extra_source_tables=list(unit.get("extra_source_tables", [])),
+            extra_item_names=list(unit.get("extra_item_names", [])),
+        )
+
+    def _build_sql_unit_groups(
+        self,
+        dataset: SceneDataset,
+        matrix: np.ndarray,
+        units: list[dict[str, object]],
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        if not units:
+            return units, []
+
+        candidates = mine_sql_base_candidates(dataset, units)
+        if not candidates:
+            standalone_units = []
+            standalone_groups = []
+            for unit in units:
+                updated = {
+                    **unit,
+                    "unit_level": "standalone",
+                    "base_unit_id": None,
+                    "extra_source_tables": [],
+                    "extra_item_names": [],
+                }
+                standalone_units.append(updated)
+                standalone_groups.append(
+                    {
+                        "key": updated["id"],
+                        "group_name": updated["name"],
+                        "base_unit": updated,
+                        "units": [],
+                    }
+                )
+            return standalone_units, standalone_groups
+
+        decorated_by_id = {str(unit["id"]): {**unit} for unit in units}
+        raw_by_id = {str(unit["id"]): unit for unit in units}
+        assigned_groups: dict[tuple[str, ...], list[str]] = {}
+        unit_to_candidate = {}
+
+        for unit in units:
+            candidate = choose_base_candidate_for_unit(dataset, unit, candidates)
+            if candidate is None:
+                continue
+            unit_id = str(unit["id"])
+            unit_to_candidate[unit_id] = candidate
+            assigned_groups.setdefault(candidate.source_subset, []).append(unit_id)
+
+        groups: list[dict[str, object]] = []
+        assigned_unit_ids: set[str] = set()
+
+        for candidate in candidates:
+            member_ids = assigned_groups.get(candidate.source_subset, [])
+            if len(member_ids) < 2:
+                continue
+
+            base_name = "+".join(candidate.source_subset)
+            base_unit_id = None
+            base_unit = None
+
+            for member_id in member_ids:
+                raw_unit = raw_by_id[member_id]
+                if self._get_unit_source_signature(dataset, raw_unit) != candidate.source_subset:
+                    continue
+                extra_sources, extra_items = build_extension_delta(dataset, raw_unit, candidate)
+                if extra_sources or extra_items:
+                    continue
+
+                updated = {
+                    **decorated_by_id[member_id],
+                    "base_name": base_name,
+                    "unit_level": "base",
+                    "base_unit_id": member_id,
+                    "extra_source_tables": [],
+                    "extra_item_names": [],
+                }
+                updated["name"] = self._build_sql_unit_name(dataset, updated)
+                decorated_by_id[member_id] = updated
+                base_unit_id = member_id
+                base_unit = updated
+                assigned_unit_ids.add(member_id)
+                break
+
+            if base_unit is None:
+                support_units = [raw_by_id[member_id] for member_id in member_ids]
+                synthetic_base = {
+                    "id": f"sql-base::{base_name}",
+                    "item_indices": candidate.shared_item_indices,
+                    "entity_indices": sorted(
+                        {
+                            entity_index
+                            for unit in support_units
+                            for entity_index in unit["entity_indices"]
+                        }
+                    ),
+                    "score": round(
+                        sum(float(unit["score"]) for unit in support_units) / max(len(support_units), 1),
+                        2,
+                    ),
+                    "base_name": base_name,
+                    "unit_level": "base",
+                    "base_unit_id": None,
+                    "extra_source_tables": [],
+                    "extra_item_names": [],
+                }
+                base_unit = self._decorate_units(dataset, matrix, [synthetic_base])[0]
+                base_unit_id = str(base_unit["id"])
+
+            extension_units: list[dict[str, object]] = []
+            for member_id in member_ids:
+                if member_id == base_unit_id:
+                    continue
+                raw_unit = raw_by_id[member_id]
+                extra_sources, extra_items = build_extension_delta(dataset, raw_unit, candidate)
+                updated = {
+                    **decorated_by_id[member_id],
+                    "base_name": base_name,
+                    "unit_level": "extension",
+                    "base_unit_id": base_unit_id,
+                    "extra_source_tables": extra_sources,
+                    "extra_item_names": extra_items,
+                }
+                updated["name"] = self._build_sql_unit_name(dataset, updated)
+                decorated_by_id[member_id] = updated
+                extension_units.append(updated)
+                assigned_unit_ids.add(member_id)
+
+            groups.append(
+                {
+                    "key": base_name,
+                    "group_name": base_unit["name"],
+                    "base_unit": base_unit,
+                    "units": sorted(
+                        extension_units,
+                        key=lambda unit: (
+                            len(unit.get("extra_source_tables", [])),
+                            len(unit["covered_entity_ids"]),
+                            unit["score"],
+                        ),
+                        reverse=True,
+                    ),
+                }
+            )
+
+        for unit_id, unit in decorated_by_id.items():
+            if unit_id in assigned_unit_ids:
+                continue
+            standalone_unit = {
+                **unit,
+                "unit_level": "standalone",
+                "base_unit_id": None,
+                "extra_source_tables": [],
+                "extra_item_names": [],
+            }
+            standalone_unit["name"] = self._build_sql_unit_name(dataset, standalone_unit)
+            decorated_by_id[unit_id] = standalone_unit
+            groups.append(
+                {
+                    "key": unit_id,
+                    "group_name": standalone_unit["name"],
+                    "base_unit": standalone_unit,
+                    "units": [],
+                }
+            )
+
+        ordered_units = list(decorated_by_id.values())
+        ordered_units.sort(
+            key=lambda unit: (
+                {"base": 0, "extension": 1, "standalone": 2}.get(unit.get("unit_level", "standalone"), 3),
+                -len(unit["covered_entity_ids"]),
+                -float(unit["score"]),
+                unit["name"],
+            )
+        )
+        groups.sort(
+            key=lambda group: (
+                0 if group["base_unit"].get("unit_level") == "base" else 1,
+                -(1 + len(group["units"])),
+                group["group_name"],
+            )
+        )
+        return ordered_units, groups
 
     def _build_assignments(
         self,
@@ -833,9 +1051,13 @@ class SetMinerService:
         units: list[dict[str, object]],
         item_lookup,
         unit_type: str,
+        sql_unit_groups: list[dict[str, object]] | None = None,
     ) -> list[str]:
         if not units:
             return ["当前数据为空，无法形成有效的组合建议。"]
+
+        if dataset.scene == "sql" and sql_unit_groups:
+            return self._build_sql_hierarchy_insights(sql_unit_groups)
 
         largest_unit = max(units, key=lambda unit: len(unit["item_ids"]))
         most_reused = max(units, key=lambda unit: len(unit["covered_entity_ids"]))
@@ -848,3 +1070,86 @@ class SetMinerService:
         if dataset.scene == "sql" and sample_sources:
             insights.append(f"字段来源主要集中在 {', '.join(sorted(set(sample_sources)))}，说明可先围绕该主题域建表。")
         return insights
+
+    def _build_sql_hierarchy_insights(self, sql_unit_groups: list[dict[str, object]]) -> list[str]:
+        if not sql_unit_groups:
+            return ["当前数据为空，无法形成有效的组合建议。"]
+
+        base_groups = [group for group in sql_unit_groups if group["base_unit"].get("unit_level") == "base"]
+        standalone_groups = [group for group in sql_unit_groups if group["base_unit"].get("unit_level") == "standalone"]
+
+        if not base_groups:
+            fallback_group = max(
+                sql_unit_groups,
+                key=lambda group: (
+                    len(group["base_unit"]["covered_entity_ids"]),
+                    group["base_unit"]["score"],
+                    len(group["base_unit"]["item_ids"]),
+                ),
+            )
+            fallback_unit = fallback_group["base_unit"]
+            sources = [source for source in fallback_unit.get("sources", []) if source not in {"unknown", "derived"}]
+            insights = [
+                f"推荐优先落地 `{fallback_unit['name']}`，它是当前复用度最高的候选宽表。",
+                f"`{fallback_unit['name']}` 当前承载的字段最完整，可作为首批主题宽表模板。",
+            ]
+            if sources:
+                insights.append(f"高频来源主要集中在 {', '.join(sources[:6])}，建议先围绕该主题域建表。")
+            return insights
+
+        primary_group = max(
+            base_groups,
+            key=lambda group: (
+                len(group["base_unit"]["covered_entity_ids"]) + len(group["units"]),
+                len(group["units"]),
+                group["base_unit"]["score"],
+            ),
+        )
+        primary_base = primary_group["base_unit"]
+        primary_extensions = primary_group["units"]
+        primary_sources = [
+            source
+            for source in primary_base.get("sources", [])
+            if source and source not in {"unknown", "derived"}
+        ]
+
+        insights = [
+            f"推荐优先落地 `{primary_base['name']}`，它是复用度最高的公共底座宽表。",
+        ]
+
+        if primary_extensions:
+            extension_labels = []
+            for unit in primary_extensions[:3]:
+                extra_sources = unit.get("extra_source_tables", [])
+                if extra_sources:
+                    extension_labels.append("+" + "+".join(extra_sources))
+                elif unit.get("extra_item_names"):
+                    extension_labels.append("字段扩展")
+            if extension_labels:
+                insights.append(
+                    f"建议在 `{primary_base['name']}` 之上继续挂接 {', '.join(extension_labels)} 等扩展宽表，避免把不同主题字段全部压进同一张大宽表。"
+                )
+            else:
+                insights.append(
+                    f"`{primary_base['name']}` 下已经形成多个主题扩展，建议按基础宽表 + 扩展宽表的层次结构落地。"
+                )
+        else:
+            insights.append(
+                f"`{primary_base['name']}` 当前已经可以独立承载主要复用字段，适合作为首批基础宽表模板。"
+            )
+
+        if primary_sources:
+            insights.append(
+                f"高频核心来源主要集中在 {', '.join(primary_sources[:6])}，建议优先围绕这组基础来源建设公共底座。"
+            )
+
+        if standalone_groups:
+            standalone_count = len(standalone_groups)
+            standalone_examples = [group["base_unit"]["name"] for group in standalone_groups[:2]]
+            insights.append(
+                f"另有 {standalone_count} 个独立专题宽表暂未形成稳定公共底座，例如 `{standalone_examples[0]}`"
+                + (f"、`{standalone_examples[1]}`" if len(standalone_examples) > 1 else "")
+                + "，建议按专题单独落地。"
+            )
+
+        return insights[:4]

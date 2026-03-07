@@ -15,7 +15,7 @@ SCENES = [
         key="sql",
         name="SQL 宽表优化",
         description="根据 SQL 或报表需求中重复出现的字段组合，推荐中间表或宽表设计方案。",
-        goal="回答应该创建哪些宽表，以及每张表包含哪些字段。",
+        goal="请先阅读重要说明，并按规范上传 SQL 文件。",
         default_unit_name="宽表",
     ),
 ]

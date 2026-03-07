@@ -1,0 +1,148 @@
+import { Collapse, Descriptions, Space, Table, Tag, Typography } from 'antd'
+import type { TableColumnsType } from 'antd'
+
+import type { SolutionUnit, SqlUnitGroup } from '../types/api'
+import { PlainTagsCell, TagsCell } from './unitTableShared'
+
+const { Text } = Typography
+
+interface SqlUnitGroupsViewProps {
+  groups: SqlUnitGroup[]
+}
+
+function buildExtensionColumns(): TableColumnsType<SolutionUnit> {
+  return [
+    {
+      title: '扩展宽表',
+      dataIndex: 'name',
+      key: 'name',
+      width: 220,
+      ellipsis: true,
+      render: (value: string, record: SolutionUnit) => (
+        <Space direction="vertical" size={2}>
+          <Text strong style={{ fontSize: 12 }}>{value}</Text>
+          <Space size={4} wrap>
+            <Tag color="blue">{record.unit_level === 'extension' ? '扩展' : '独立'}</Tag>
+            {record.covered_entity_names.length > 0 && <Tag>{`${record.covered_entity_names.length} 个 SQL`}</Tag>}
+          </Space>
+        </Space>
+      ),
+    },
+    {
+      title: '新增来源',
+      key: 'extra_sources',
+      width: 220,
+      render: (_: unknown, record: SolutionUnit) => (
+        record.extra_source_tables.length
+          ? <PlainTagsCell items={record.extra_source_tables} maxVisible={4} containerWidth={200} tagMaxWidth={180} />
+          : <Text type="secondary">无</Text>
+      ),
+    },
+    {
+      title: '新增字段',
+      key: 'extra_items',
+      width: 360,
+      render: (_: unknown, record: SolutionUnit) => (
+        record.extra_item_names.length
+          ? <TagsCell items={record.extra_item_names.map((name) => ({ name, expr: '' }))} />
+          : <Text type="secondary">无</Text>
+      ),
+    },
+    {
+      title: '覆盖对象',
+      key: 'covered_entities',
+      width: 280,
+      render: (_: unknown, record: SolutionUnit) => (
+        <PlainTagsCell items={record.covered_entity_names} maxVisible={6} containerWidth={260} tagMaxWidth={220} />
+      ),
+    },
+    {
+      title: '得分',
+      dataIndex: 'score',
+      key: 'score',
+      width: 80,
+      align: 'center',
+    },
+  ]
+}
+
+function BaseUnitSummary({ unit, extensionCount }: { unit: SolutionUnit; extensionCount: number }) {
+  return (
+    <Descriptions
+      size="small"
+      bordered
+      column={1}
+      styles={{ label: { width: 110, fontWeight: 600 } }}
+    >
+      <Descriptions.Item label="基础宽表">
+        <Space direction="vertical" size={6} style={{ width: '100%' }}>
+          <Space size={6} wrap>
+            <Text strong>{unit.name}</Text>
+            <Tag color="gold">基础</Tag>
+            <Tag>{`${unit.covered_entity_names.length} 个 SQL`}</Tag>
+            <Tag>{`${extensionCount} 个扩展`}</Tag>
+          </Space>
+          <Text type="secondary" style={{ fontSize: 12 }}>{unit.rationale}</Text>
+        </Space>
+      </Descriptions.Item>
+      <Descriptions.Item label="基础来源">
+        {unit.sources.length
+          ? <PlainTagsCell items={unit.sources} maxVisible={6} containerWidth={520} tagMaxWidth={220} />
+          : <Text type="secondary">无</Text>}
+      </Descriptions.Item>
+      <Descriptions.Item label="基础字段">
+        <TagsCell items={unit.item_display_names.map((name, idx) => ({ name, expr: unit.item_exprs[idx] ?? '' }))} />
+      </Descriptions.Item>
+    </Descriptions>
+  )
+}
+
+export function SqlUnitGroupsView({ groups }: SqlUnitGroupsViewProps) {
+  const extensionColumns = buildExtensionColumns()
+
+  return (
+    <Collapse
+      defaultActiveKey={groups.map((group) => group.key)}
+      items={groups.map((group) => ({
+        key: group.key,
+        label: (
+          <Space size={8} wrap>
+            <Text strong>{group.group_name}</Text>
+            <Tag color={group.base_unit.unit_level === 'standalone' ? 'default' : 'gold'}>
+              {group.base_unit.unit_level === 'standalone' ? '独立宽表' : '基础宽表组'}
+            </Tag>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {group.base_unit.unit_level === 'standalone'
+                ? `${group.base_unit.covered_entity_names.length} 个 SQL`
+                : `${1 + group.units.length} 层结果`}
+            </Text>
+          </Space>
+        ),
+        children: group.base_unit.unit_level === 'standalone'
+          ? (
+            <Table
+              rowKey="id"
+              pagination={false}
+              size="small"
+              scroll={{ x: 'max-content' }}
+              dataSource={[group.base_unit]}
+              columns={buildExtensionColumns()}
+            />
+          )
+          : (
+            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              <BaseUnitSummary unit={group.base_unit} extensionCount={group.units.length} />
+              <Table
+                rowKey="id"
+                pagination={false}
+                size="small"
+                scroll={{ x: 'max-content' }}
+                dataSource={group.units}
+                columns={extensionColumns}
+              />
+            </Space>
+          ),
+      }))}
+    />
+  )
+}

@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 
 SceneType = Literal["erp", "sql"]
+UnitLevel = Literal["base", "extension", "standalone"]
 
 
 class Entity(BaseModel):
@@ -87,6 +88,17 @@ class SolutionUnit(BaseModel):
     rationale: str
     score: float
     sources: list[str] = Field(default_factory=list)
+    unit_level: UnitLevel = "standalone"
+    base_unit_id: str | None = None
+    extra_source_tables: list[str] = Field(default_factory=list)
+    extra_item_names: list[str] = Field(default_factory=list)
+
+
+class SqlUnitGroup(BaseModel):
+    key: str
+    group_name: str
+    base_unit: SolutionUnit
+    units: list[SolutionUnit] = Field(default_factory=list)
 
 
 class Assignment(BaseModel):
@@ -174,6 +186,7 @@ class SolveResponse(BaseModel):
     assignments: list[Assignment]
     warnings: list[str]
     insights: list[str]
+    sql_unit_groups: list[SqlUnitGroup] | None = None
     erp_role_diff: RoleDiffReport | None = None
     erp_constraint_report: ErpConstraintReport | None = None
     graph: dict[str, Any] | None = None  # { nodes: [...], edges: [...] }

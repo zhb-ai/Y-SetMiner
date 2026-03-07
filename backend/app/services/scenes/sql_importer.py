@@ -47,6 +47,15 @@ class ResolvedField:
 
 
 class SqlImportService:
+    def _normalize_identifier(self, value: str | None) -> str:
+        if value is None:
+            return ""
+        return str(value).strip().lower()
+
+    def _normalize_source_name(self, value: str | None) -> str | None:
+        normalized = self._normalize_identifier(value)
+        return normalized or None
+
     async def preview_uploads(self, files: list[UploadFile]) -> ImportPreviewResponse:
         documents, import_warnings = await self._parse_uploads(files)
         dataset = self._build_dataset(documents, import_warnings=import_warnings)
@@ -187,7 +196,7 @@ class SqlImportService:
             amap = self._build_alias_map(select_expr, cte_map)
             for alias, info in amap.items():
                 if info.get("type") == "table":
-                    alias_to_table[alias] = str(info["table"])
+                    alias_to_table[self._normalize_identifier(alias)] = self._normalize_identifier(str(info["table"]))
         columns = [
             {
                 "name": field.field_name,
@@ -224,10 +233,10 @@ class SqlImportService:
         joins: list[str] = []
         for match in pattern.finditer(sql):
             keyword, raw_table, alias = match.groups()
-            table = raw_table.strip("`[]\"")
+            table = self._normalize_identifier(raw_table.strip("`[]\""))
             if table.startswith("("):
                 continue
-            alias_key = alias or table.split(".")[-1]
+            alias_key = self._normalize_identifier(alias or table.split(".")[-1])
             alias_map[alias_key] = table
             if keyword.lower() == "join":
                 joins.append(table)
@@ -261,7 +270,8 @@ class SqlImportService:
             qualified_matches = re.findall(r"([A-Za-z_]\w*)\.([A-Za-z_]\w*)", cleaned)
             if qualified_matches:
                 alias, column = qualified_matches[-1]
-                source_table = alias_map.get(alias, alias)
+                normalized_alias = self._normalize_identifier(alias)
+                source_table = alias_map.get(normalized_alias, normalized_alias)
                 source_column = column
             else:
                 bare_matches = re.findall(r"\b([A-Za-z_]\w*)\b", cleaned)
@@ -326,16 +336,16 @@ class SqlImportService:
         for cte in with_clause.find_all(exp.CTE):
             alias = cte.alias_or_name
             if alias:
-                cte_map[alias] = cte.this
+                cte_map[self._normalize_identifier(alias)] = cte.this
         return cte_map
 
     def _collect_base_tables(self, expression: exp.Expression, cte_map: dict[str, exp.Expression]) -> set[str]:
         tables: set[str] = set()
         for table in expression.find_all(exp.Table):
-            table_name = table.name
+            table_name = self._normalize_identifier(table.name)
             if not table_name or table_name in cte_map:
                 continue
-            tables.add(table.sql(dialect=""))
+            tables.add(table_name)
         return tables
 
     def _collect_join_tables(self, expression: exp.Expression, cte_map: dict[str, exp.Expression]) -> set[str]:
@@ -343,9 +353,9 @@ class SqlImportService:
         for join in expression.find_all(exp.Join):
             table = join.this
             if isinstance(table, exp.Table):
-                table_name = table.name
+                table_name = self._normalize_identifier(table.name)
                 if table_name and table_name not in cte_map:
-                    join_tables.add(table.sql(dialect=""))
+                    join_tables.add(table_name)
         return join_tables
 
     def _collect_join_edges(
@@ -419,7 +429,7 @@ class SqlImportService:
         if source is None:
             return ""
         if isinstance(source, exp.Table):
-            name = source.name
+            name = self._normalize_identifier(source.name)
             if name and name not in cte_map:
                 return name
         return ""
@@ -439,11 +449,12 @@ class SqlImportService:
         """把表别名解析成真实物理表名，CTE 返回空（不计入物理 JOIN 图）。"""
         if not alias:
             return ""
-        info = alias_map.get(alias)
+        normalized_alias = self._normalize_identifier(alias)
+        info = alias_map.get(normalized_alias)
         if info is None:
-            return alias
+            return normalized_alias
         if info["type"] == "table":
-            return str(info["table"])
+            return self._normalize_identifier(str(info["table"]))
         # CTE 或子查询，不计入物理表 JOIN 图
         return ""
 
@@ -543,7 +554,7 @@ class SqlImportService:
 
         # SELECT * FROM cte_name
         if isinstance(source, exp.Table):
-            name = source.name
+            name = self._normalize_identifier(source.name)
             if name and name in cte_map:
                 cte_expr = cte_map[name]
                 if isinstance(cte_expr, exp.Select):
@@ -567,22 +578,23 @@ class SqlImportService:
             if source is None:
                 continue
             if isinstance(source, exp.Table):
-                alias = source.alias_or_name or source.name
-                if source.name in cte_map:
+                alias = self._normalize_identifier(source.alias_or_name or source.name)
+                source_name = self._normalize_identifier(source.name)
+                if source_name in cte_map:
                     # 不覆盖已有映射：同名别名以先出现的为准
                     if alias not in alias_map:
                         alias_map[alias] = {
                             "type": "cte",
-                            "expression": cte_map[source.name],
+                            "expression": cte_map[source_name],
                         }
                 else:
                     if alias not in alias_map:
                         alias_map[alias] = {
                             "type": "table",
-                            "table": source.name,  # 纯表名，不含别名部分
+                            "table": source_name,  # 纯表名，不含别名部分
                         }
             elif isinstance(source, exp.Subquery):
-                alias = source.alias_or_name
+                alias = self._normalize_identifier(source.alias_or_name)
                 if alias:
                     if alias not in alias_map:
                         alias_map[alias] = {
@@ -666,11 +678,12 @@ class SqlImportService:
     ) -> dict[str, set[str]]:
         table_alias = column.table
         column_name = column.name
+        normalized_table_alias = self._normalize_identifier(table_alias)
 
-        if table_alias and table_alias in alias_map:
-            alias_info = alias_map[table_alias]
+        if normalized_table_alias and normalized_table_alias in alias_map:
+            alias_info = alias_map[normalized_table_alias]
             if alias_info["type"] == "table":
-                table_name = str(alias_info["table"])
+                table_name = self._normalize_identifier(str(alias_info["table"]))
                 return {
                     "tables": {table_name},
                     "columns": {f"{table_name}.{column_name}"},
@@ -682,8 +695,8 @@ class SqlImportService:
                     cte_map,
                 )
 
-        if table_alias:
-            return {"tables": {table_alias}, "columns": {f"{table_alias}.{column_name}"}}
+        if normalized_table_alias:
+            return {"tables": {normalized_table_alias}, "columns": {f"{normalized_table_alias}.{column_name}"}}
 
         base_tables = {
             str(info["table"])
@@ -751,13 +764,13 @@ class SqlImportService:
         for scoped_column in scope_expression.find_all(exp.Column):
             if scoped_column.name != column_name or not scoped_column.table:
                 continue
-            alias = scoped_column.table
+            alias = self._normalize_identifier(scoped_column.table)
             info = alias_map.get(alias)
             if info is None:
                 candidates.append({"tables": {alias}, "columns": {f"{alias}.{column_name}"}})
                 continue
             if info["type"] == "table":
-                table_name = str(info["table"])
+                table_name = self._normalize_identifier(str(info["table"]))
                 candidates.append({"tables": {table_name}, "columns": {f"{table_name}.{column_name}"}})
             elif info["type"] in {"cte", "subquery"}:
                 nested = self._resolve_from_nested_query(info["expression"], column_name, cte_map)
@@ -931,13 +944,13 @@ class SqlImportService:
         for idx, document in enumerate(documents):
             entity_id = f"sql_{idx + 1}"
             for column in document.columns:
-                raw_source = column["source_table"] or "unknown"
+                raw_source = self._normalize_source_name(column["source_table"]) or "unknown"
                 # 别名 → 真实表名，使用文档级优先、全局次之
-                real_source = (
+                real_source = self._normalize_source_name(
                     document.alias_to_table.get(raw_source)
                     or global_alias_to_table.get(raw_source)
                     or raw_source
-                )
+                ) or "unknown"
                 item_id = f"{real_source}::{column['name']}"
                 if item_id not in item_map:
                     item_map[item_id] = Item(
@@ -947,7 +960,17 @@ class SqlImportService:
                         source=real_source,
                         item_type="column",
                         meta={
-                            "source_tables": str(column.get("source_tables", "")),
+                            "source_tables": ", ".join(
+                                sorted(
+                                    filter(
+                                        None,
+                                        (
+                                            self._normalize_source_name(part.strip())
+                                            for part in str(column.get("source_tables", "")).split(",")
+                                        ),
+                                    )
+                                )
+                            ),
                             "column_name": str(column.get("column_name", "")),
                             "original_expr": str(column.get("original_expr", "")),
                         },
@@ -1000,8 +1023,12 @@ class SqlImportService:
                     "right_col": edge.right_col,
                     "source": edge.sql_source,
                 }
-                graph[edge.left_table][edge.right_table].append(edge_info)
-                graph[edge.right_table][edge.left_table].append(edge_info)
+                left_table = self._normalize_identifier(edge.left_table)
+                right_table = self._normalize_identifier(edge.right_table)
+                if not left_table or not right_table:
+                    continue
+                graph[left_table][right_table].append(edge_info)
+                graph[right_table][left_table].append(edge_info)
         # 转为普通 dict 方便序列化
         return {t: dict(neighbors) for t, neighbors in graph.items()}
 

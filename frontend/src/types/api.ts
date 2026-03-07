@@ -38,6 +38,17 @@ export interface SolutionUnit {
   rationale: string
   score: number
   sources: string[]
+  unit_level: 'base' | 'extension' | 'standalone'
+  base_unit_id?: string | null
+  extra_source_tables: string[]
+  extra_item_names: string[]
+}
+
+export interface SqlUnitGroup {
+  key: string
+  group_name: string
+  base_unit: SolutionUnit
+  units: SolutionUnit[]
 }
 
 export interface Assignment {
@@ -125,6 +136,7 @@ export interface SolveResponse {
   assignments: Assignment[]
   warnings: string[]
   insights: string[]
+  sql_unit_groups?: SqlUnitGroup[] | null
   erp_role_diff?: RoleDiffReport | null
   erp_constraint_report?: ErpConstraintReport | null
   graph?: {

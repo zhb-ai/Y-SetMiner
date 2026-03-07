@@ -62,9 +62,23 @@ class SqlImportServiceTests(unittest.TestCase):
             "采购同比.sql 的星号透传字段来源未被正确解析",
         )
         self.assertTrue(
-            any(str(column.get("source_table")) == "JS_SALES" for column in document.columns),
-            "采购同比.sql 应该能够回溯到 JS_SALES 来源",
+            any(str(column.get("source_table")) == "js_sales" for column in document.columns),
+            "采购同比.sql 应该能够回溯到 js_sales 来源",
         )
+
+    def test_source_table_names_are_normalized_to_lowercase(self) -> None:
+        document = self.service._parse_sql_document(
+            "mixed_case.sql",
+            "SELECT A.ID, b.Name FROM JS_SALES A JOIN js_sales_b b ON A.ID = b.ID",
+        )
+        dataset = self.service._build_dataset([document], import_warnings=[])
+
+        self.assertEqual(sorted(document.tables), ["js_sales", "js_sales_b"])
+        self.assertEqual(sorted(document.joins), ["js_sales_b"])
+        self.assertTrue(all((column.get("source_table") or "").islower() for column in document.columns))
+        self.assertTrue(all((item.source or "").islower() for item in dataset.items if item.source not in {"unknown", "derived"}))
+        self.assertIn("js_sales", dataset.meta["join_graph"])
+        self.assertIn("js_sales_b", dataset.meta["join_graph"]["js_sales"])
 
     def test_sanitize_vendor_sql_reports_fullwidth_punctuation_fix(self) -> None:
         normalized, notes = self.service._sanitize_vendor_sql("select * from （select 1）；")
@@ -182,6 +196,42 @@ class SetMinerServiceSqlUnitTests(unittest.TestCase):
             constraints=ConstraintConfig(max_items_per_unit=20, max_units_per_entity=3),
         )
 
+    def _build_hierarchy_dataset(self) -> SceneDataset:
+        items = [
+            Item(id="a::id", name="id", group="table_a", source="table_a"),
+            Item(id="a::name", name="name", group="table_a", source="table_a"),
+            Item(id="b::id", name="biz_id", group="table_b", source="table_b"),
+            Item(id="b::name", name="biz_name", group="table_b", source="table_b"),
+            Item(id="c::owner", name="owner_name", group="table_c", source="table_c"),
+            Item(id="d::status", name="status_name", group="table_d", source="table_d"),
+        ]
+        return SceneDataset(
+            scene="sql",
+            entities=[
+                Entity(id="sql_1", name="sql_1.sql"),
+                Entity(id="sql_2", name="sql_2.sql"),
+                Entity(id="sql_3", name="sql_3.sql"),
+            ],
+            items=items,
+            relations=[
+                Relation(entity_id="sql_1", item_id="a::id"),
+                Relation(entity_id="sql_1", item_id="a::name"),
+                Relation(entity_id="sql_1", item_id="b::id"),
+                Relation(entity_id="sql_1", item_id="b::name"),
+                Relation(entity_id="sql_2", item_id="a::id"),
+                Relation(entity_id="sql_2", item_id="a::name"),
+                Relation(entity_id="sql_2", item_id="b::id"),
+                Relation(entity_id="sql_2", item_id="b::name"),
+                Relation(entity_id="sql_2", item_id="c::owner"),
+                Relation(entity_id="sql_3", item_id="a::id"),
+                Relation(entity_id="sql_3", item_id="a::name"),
+                Relation(entity_id="sql_3", item_id="b::id"),
+                Relation(entity_id="sql_3", item_id="b::name"),
+                Relation(entity_id="sql_3", item_id="d::status"),
+            ],
+            constraints=ConstraintConfig(max_items_per_unit=20, max_units_per_entity=3),
+        )
+
     def test_sql_unit_name_uses_combination_name_for_multi_source_unit(self) -> None:
         dataset = self._build_dataset(
             [
@@ -294,6 +344,75 @@ class SetMinerServiceSqlUnitTests(unittest.TestCase):
 
         self.assertTrue(any("demo.sql" in item for item in warnings))
 
+    def test_build_sql_unit_groups_extracts_base_unit_from_shared_sources(self) -> None:
+        dataset = self._build_hierarchy_dataset()
+        units = [
+            {"id": "unit-base", "item_indices": [0, 1, 2, 3], "entity_indices": [0], "score": 4.0},
+            {"id": "unit-c", "item_indices": [0, 1, 2, 3, 4], "entity_indices": [1], "score": 5.0},
+            {"id": "unit-d", "item_indices": [0, 1, 2, 3, 5], "entity_indices": [2], "score": 5.0},
+        ]
+
+        decorated = self.service._decorate_units(dataset, self._matrix(3, 6), units)
+        final_units, groups = self.service._build_sql_unit_groups(dataset, self._matrix(3, 6), decorated)
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["base_unit"]["name"], "table_a+table_b基础宽表")
+        self.assertEqual(groups[0]["base_unit"]["unit_level"], "base")
+        self.assertEqual(len(groups[0]["units"]), 2)
+        self.assertEqual({unit["name"] for unit in groups[0]["units"]}, {
+            "table_a+table_b扩展宽表(+table_c)",
+            "table_a+table_b扩展宽表(+table_d)",
+        })
+        self.assertEqual(
+            {unit["unit_level"] for unit in final_units},
+            {"base", "extension"},
+        )
+
+    def test_solve_response_includes_sql_unit_groups_and_extension_delta(self) -> None:
+        dataset = self._build_hierarchy_dataset()
+        original_select_units = self.service._select_units
+        self.service._select_units = lambda *_args, **_kwargs: [
+            {"id": "unit-base", "item_indices": [0, 1, 2, 3], "entity_indices": [0], "score": 4.0},
+            {"id": "unit-c", "item_indices": [0, 1, 2, 3, 4], "entity_indices": [1], "score": 5.0},
+            {"id": "unit-d", "item_indices": [0, 1, 2, 3, 5], "entity_indices": [2], "score": 5.0},
+        ]
+        try:
+            result = self.service.solve(dataset)
+        finally:
+            self.service._select_units = original_select_units
+
+        self.assertIsNotNone(result.sql_unit_groups)
+        assert result.sql_unit_groups is not None
+        self.assertEqual(len(result.sql_unit_groups), 1)
+        group = result.sql_unit_groups[0]
+        self.assertEqual(group.base_unit.name, "table_a+table_b基础宽表")
+        self.assertEqual(group.base_unit.unit_level, "base")
+        self.assertEqual(len(group.units), 2)
+        self.assertEqual(
+            {tuple(unit.extra_source_tables) for unit in group.units},
+            {("table_c",), ("table_d",)},
+        )
+        self.assertTrue(all(unit.base_unit_id == group.base_unit.id for unit in group.units))
+
+    def test_sql_hierarchy_insights_prioritize_base_group_and_filter_unknown_sources(self) -> None:
+        dataset = self._build_hierarchy_dataset()
+        original_select_units = self.service._select_units
+        self.service._select_units = lambda *_args, **_kwargs: [
+            {"id": "unit-base", "item_indices": [0, 1, 2, 3], "entity_indices": [0], "score": 4.0},
+            {"id": "unit-c", "item_indices": [0, 1, 2, 3, 4], "entity_indices": [1], "score": 5.0},
+            {"id": "unit-d", "item_indices": [0, 1, 2, 3, 5], "entity_indices": [2], "score": 5.0},
+        ]
+        try:
+            result = self.service.solve(dataset)
+        finally:
+            self.service._select_units = original_select_units
+
+        self.assertTrue(result.insights)
+        self.assertIn("基础宽表", result.insights[0])
+        self.assertTrue(any("扩展宽表" in item for item in result.insights))
+        self.assertFalse(any("unknown" in item for item in result.insights))
+        self.assertFalse(any("derived" in item for item in result.insights))
+
     @staticmethod
     def _matrix(rows: int, cols: int):
         import numpy as np
@@ -316,15 +435,19 @@ class SqlSolveEndToEndTests(unittest.TestCase):
         dataset = self.import_service._build_dataset(documents, import_warnings=[])
         return self.set_miner.solve(dataset)
 
-    def test_end_to_end_sql_solve_keeps_stable_combination_names(self) -> None:
+    def test_end_to_end_sql_solve_exposes_hierarchy_metadata(self) -> None:
         result = self._solve_cases(["采购发票.sql", "采购-供应商对比.sql", "采购型号明细.sql"])
 
-        unit_names = [unit.name for unit in result.units]
-        self.assertIn("bd_cubasdoc+po_invoice+po_invoice_b组合宽表2", unit_names)
-        self.assertIn("bd_cubasdoc+bd_invbasdoc+po_invoice+po_invoice_b组合宽表3", unit_names)
+        self.assertIsNotNone(result.sql_unit_groups)
+        self.assertTrue(result.units)
+        self.assertTrue(all(unit.unit_level in {"base", "extension", "standalone"} for unit in result.units))
         self.assertTrue(
-            any(name.startswith("bd_invbasdoc+bd_stordoc+derived+so_saleinvoice+so_saleinvoice_b+so_squaredetail+v_zlw_cust组合宽表") for name in unit_names),
-            "多来源组合宽表命名应保持稳定且按来源字母序排列",
+            any(
+                unit.name.startswith("bd_cubasdoc+po_invoice+po_invoice_b")
+                or unit.name.startswith("bd_cubasdoc+bd_invbasdoc+po_invoice+po_invoice_b")
+                for unit in result.units
+            ),
+            "多来源宽表命名应保持字母序稳定前缀",
         )
 
         procurement_compare_assignment = next(

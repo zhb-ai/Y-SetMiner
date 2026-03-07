@@ -43,6 +43,21 @@ const ERP_COLS_OPTIONAL = [
   'permission_level', 'sod_conflict_code', 'sod_conflict_level', 'permission_path',
 ]
 
+const SQL_IMPORT_NOTES = [
+  {
+    title: '不要直接上传视图定义文件',
+    detail: '如果 SQL 中引用了视图，请同时提供视图的原始 SQL，以便分析真正的底层原始表',
+  },
+  {
+    title: '禁止使用 SELECT *',
+    detail: '必须显式指定列名，如 SELECT col1, col2, col3 FROM table，否则无法准确识别字段归属',
+  },
+  {
+    title: '禁止使用裸列名',
+    detail: '在多表 JOIN 场景下，列名必须显式指定表名前缀，如 SELECT t1.col1, t2.col2 FROM table1 t1 JOIN table2 t2。裸列名（如直接写 col1）会导致静态解析器无法确定字段归属哪张表',
+  },
+] as const
+
 type WarningGroupKey = 'auto_fix' | 'warning' | 'excluded' | 'other'
 
 function classifyWarning(item: string): WarningGroupKey {
@@ -272,8 +287,28 @@ function App() {
               </Radio.Button>
             ))}
           </Radio.Group>
-          {activeScene && (
+          {activeScene && scene !== 'sql' && (
             <Text type="secondary" style={{ fontSize: 12 }}>{activeScene.goal}</Text>
+          )}
+          {scene === 'sql' && (
+            <div
+              style={{
+                border: '1px solid #ffe58f',
+                background: '#fffbe6',
+                borderRadius: 8,
+                padding: '10px 12px',
+              }}
+            >
+              <Text strong style={{ display: 'block', fontSize: 12, marginBottom: 6 }}>重要说明：</Text>
+              <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                {SQL_IMPORT_NOTES.map((note) => (
+                  <Text key={note.title} style={{ fontSize: 12, color: '#595959', lineHeight: 1.7 }}>
+                    <Text strong style={{ fontSize: 12 }}>{note.title}</Text>
+                    ：{note.detail}
+                  </Text>
+                ))}
+              </Space>
+            </div>
           )}
           <Button
             size="middle"
@@ -574,7 +609,7 @@ function App() {
                 {
                   key: 'units',
                   label: scene === 'erp' ? '推荐角色' : '推荐宽表',
-                  children: <UnitsTable units={result.units} scene={scene} />,
+                  children: <UnitsTable units={result.units} scene={scene} sqlUnitGroups={result.sql_unit_groups} />,
                 },
                 {
                   key: 'assignments',
