@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@antv/g6": "^5.0.51",
     "antd": "^5.27.6",
     "axios": "^1.13.2",
     "react": "^19.2.0",

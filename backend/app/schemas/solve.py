@@ -80,6 +80,8 @@ class SolutionUnit(BaseModel):
     unit_type: str
     item_ids: list[str]
     item_names: list[str]
+    item_display_names: list[str] = Field(default_factory=list)
+    item_exprs: list[str] = Field(default_factory=list)  # 对应 item_names 的原始表达式，无则为空字符串
     covered_entity_ids: list[str]
     covered_entity_names: list[str]
     rationale: str
@@ -174,3 +176,4 @@ class SolveResponse(BaseModel):
     insights: list[str]
     erp_role_diff: RoleDiffReport | None = None
     erp_constraint_report: ErpConstraintReport | None = None
+    graph: dict[str, Any] | None = None  # { nodes: [...], edges: [...] }

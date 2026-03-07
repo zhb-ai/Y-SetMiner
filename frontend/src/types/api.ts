@@ -31,6 +31,8 @@ export interface SolutionUnit {
   unit_type: string
   item_ids: string[]
   item_names: string[]
+  item_display_names: string[]
+  item_exprs: string[]
   covered_entity_ids: string[]
   covered_entity_names: string[]
   rationale: string
@@ -125,4 +127,20 @@ export interface SolveResponse {
   insights: string[]
   erp_role_diff?: RoleDiffReport | null
   erp_constraint_report?: ErpConstraintReport | null
+  graph?: {
+    nodes: Array<{
+      id: string
+      label: string
+      node_type: string
+      [key: string]: unknown
+    }>
+    edges: Array<{
+      id: string
+      source: string
+      target: string
+      edge_type: string
+      label?: string
+      [key: string]: unknown
+    }>
+  } | null
 }

@@ -22,6 +22,7 @@ import { CheckCircleOutlined, InfoCircleOutlined, ReloadOutlined, UploadOutlined
 import './App.css'
 import { AssignmentsTable } from './components/AssignmentsTable'
 import { ConstraintReportView } from './components/ConstraintReportView'
+import GraphView from './components/GraphView'
 import { RoleDiffView } from './components/RoleDiffView'
 import { UnitsTable } from './components/UnitsTable'
 import {
@@ -396,13 +397,13 @@ function App() {
         <Card size="small" className="ctrl-card" title={<Text strong style={{ fontSize: 13 }}>批量导入 SQL 文件</Text>}>
           <Space direction="vertical" size={14} style={{ width: '100%' }}>
             <Text style={{ fontSize: 12, color: '#595959' }}>
-              支持多个 <Text code style={{ fontSize: 11 }}>.sql</Text> 文件，系统自动提取字段、来源表和 JOIN 线索。
+              支持多个 <Text code style={{ fontSize: 11 }}>.sql</Text> / <Text code style={{ fontSize: 11 }}>.txt</Text> 文件，系统自动提取字段、来源表和 JOIN 线索。
             </Text>
             <div className="upload-drop-zone">
               <label className="upload-drop-label">
                 <input
                   type="file"
-                  accept=".sql"
+                  accept=".sql,.txt"
                   multiple
                   style={{ display: 'none' }}
                   onChange={(e) => {
@@ -422,7 +423,7 @@ function App() {
                   <div className="upload-drop-placeholder">
                     <UploadOutlined style={{ fontSize: 20, color: '#bfbfbf' }} />
                     <Text style={{ fontSize: 12, color: '#8c8c8c' }}>点击选择 SQL 文件</Text>
-                    <Text style={{ fontSize: 11, color: '#bfbfbf' }}>支持多选</Text>
+                    <Text style={{ fontSize: 11, color: '#bfbfbf' }}>支持多选，.sql / .txt</Text>
                   </div>
                 )}
               </label>
@@ -501,7 +502,7 @@ function App() {
                 {
                   key: 'units',
                   label: scene === 'erp' ? '推荐角色' : '推荐宽表',
-                  children: <UnitsTable units={result.units} />,
+                  children: <UnitsTable units={result.units} scene={scene} />,
                 },
                 {
                   key: 'assignments',
@@ -528,7 +529,25 @@ function App() {
                             size="small"
                             dataSource={result.warnings}
                             locale={{ emptyText: '当前无额外风险提示' }}
-                            renderItem={(item) => <List.Item>{item}</List.Item>}
+                            renderItem={(item) => {
+                              const isJoinWarn = item.startsWith('⚠ 宽表') && item.includes('孤立');
+                              const isGranWarn = item.startsWith('⚠ 宽表') && item.includes('粒度');
+                              const isWarn = isJoinWarn || isGranWarn;
+                              return (
+                                <List.Item style={{ padding: '4px 0' }}>
+                                  {isWarn ? (
+                                    <Alert
+                                      type={isJoinWarn ? 'error' : 'warning'}
+                                      showIcon
+                                      message={<span style={{ fontSize: 12 }}>{item}</span>}
+                                      style={{ width: '100%', padding: '4px 8px' }}
+                                    />
+                                  ) : (
+                                    <span>{item}</span>
+                                  )}
+                                </List.Item>
+                              );
+                            }}
                           />
                         </Card>
                       </Col>
@@ -540,6 +559,18 @@ function App() {
                   : []),
                 ...(scene === 'erp' && result.erp_role_diff
                   ? [{ key: 'role-diff', label: '现状角色差异', children: <RoleDiffView report={result.erp_role_diff} /> }]
+                  : []),
+                ...(result.graph && result.graph.nodes.length > 0
+                  ? [{
+                      key: 'graph',
+                      label: '关系图',
+                      children: (
+                        <GraphView
+                          scene={scene}
+                          data={result.graph as { nodes: Array<{ id: string; label: string; node_type: string; [key: string]: unknown }>; edges: Array<{ id: string; source: string; target: string; edge_type: string; label?: string; [key: string]: unknown }> }}
+                        />
+                      ),
+                    }]
                   : []),
               ]}
             />

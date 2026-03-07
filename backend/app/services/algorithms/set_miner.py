@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
+from itertools import combinations
 
 import numpy as np
 
@@ -15,6 +16,7 @@ from app.schemas.solve import (
     SolutionUnit,
     SummaryMetric,
 )
+from app.services.graph.graph_builder import build_erp_graph, build_sql_graph
 from app.services.matrix.builder import build_matrix
 from app.services.scenes.erp_importer import CurrentRoleState
 from app.services.scenes.erp_role_diff import ErpRoleDiffService
@@ -53,6 +55,8 @@ class SetMinerService:
         )
         redundancy = max(total_granted - total_required, 0)
 
+        item_term = "权限" if dataset.scene == "erp" else "字段"
+
         summary = [
             SummaryMetric(
                 label="推荐组合数",
@@ -70,9 +74,9 @@ class SetMinerService:
                 hint="当前 MVP 以完全覆盖输入需求为目标。",
             ),
             SummaryMetric(
-                label="冗余授权/字段数",
+                label=f"冗余{item_term}数",
                 value=str(redundancy),
-                hint="由共享组合带来的附加权限或字段数量。",
+                hint=f"由共享组合带来的附加{item_term}数量。",
             ),
         ]
 
@@ -93,6 +97,8 @@ class SetMinerService:
                     unit_type=unit_type,
                     item_ids=unit["item_ids"],
                     item_names=unit["item_names"],
+                    item_display_names=unit["item_display_names"],
+                    item_exprs=unit["item_exprs"],
                     covered_entity_ids=unit["covered_entity_ids"],
                     covered_entity_names=unit["covered_entity_names"],
                     rationale=unit["rationale"],
@@ -110,6 +116,15 @@ class SetMinerService:
 
         if dataset.scene == "erp":
             response.erp_role_diff = self.erp_role_diff_service.build_diff_report(response, current_role_state)
+
+        # 构建关系图（附加在 response 中，前端按需展示）
+        try:
+            if dataset.scene == "sql":
+                response.graph = build_sql_graph(dataset, response)
+            else:
+                response.graph = build_erp_graph(dataset, response)
+        except Exception:
+            response.graph = None  # 图构建失败不影响主流程
 
         return response
 
@@ -187,6 +202,7 @@ class SetMinerService:
         items = dataset.items
         entities = dataset.entities
         label_prefix = "角色" if dataset.scene == "erp" else "宽表"
+        item_term = "权限" if dataset.scene == "erp" else "字段"
 
         for idx, unit in enumerate(units, start=1):
             item_indices = unit["item_indices"]
@@ -197,7 +213,7 @@ class SetMinerService:
             top_names = "、".join(item.name for item in unit_items[:2])
             name = f"{top_group}{label_prefix}{idx}"
             sources = sorted({item.source for item in unit_items if item.source})
-            rationale = f"覆盖 {len(entity_indices)} 个实体，核心字段/权限为 {top_names}。"
+            rationale = f"覆盖 {len(entity_indices)} 个实体，核心{item_term}为 {top_names}。"
             decorated.append(
                 {
                     "id": unit["id"],
@@ -206,6 +222,8 @@ class SetMinerService:
                     "item_indices": item_indices,
                     "item_ids": [items[item_idx].id for item_idx in item_indices],
                     "item_names": [items[item_idx].name for item_idx in item_indices],
+                    "item_display_names": [items[item_idx].name for item_idx in item_indices],
+                    "item_exprs": [items[item_idx].meta.get("original_expr", "") for item_idx in item_indices],
                     "covered_entity_ids": [entities[e_idx].id for e_idx in entity_indices],
                     "covered_entity_names": [entities[e_idx].name for e_idx in entity_indices],
                     "score": unit["score"],
@@ -420,14 +438,151 @@ class SetMinerService:
         units: list[dict[str, object]],
     ) -> list[str]:
         warnings: list[str] = []
+        item_term = "权限" if dataset.scene == "erp" else "字段"
         if len(units) > max(6, len(dataset.entities)):
             warnings.append("当前组合数量偏多，说明输入需求差异较大，后续可考虑引入 BMF/ILP 精修。")
         if any(assignment.uncovered_item_names for assignment in assignments):
-            warnings.append("部分实体仍存在未完全吸收到共享组合中的字段/权限，建议增加补充组合或放宽约束。")
+            warnings.append(f"部分实体仍存在未完全吸收到共享组合中的{item_term}，建议增加补充组合或放宽约束。")
         if dataset.scene == "erp" and any(unit.get("soft_conflict_names") for unit in units):
             warnings.append("当前推荐角色中仍存在 soft SoD 告警组合，请在结果页中进一步审核。")
         if dataset.scene == "sql":
-            warnings.append("SQL 场景当前仅基于字段集合做归并，JOIN 可达和粒度校验建议在下一阶段补强。")
+            warnings.extend(self._check_join_reachability(dataset, units))
+            warnings.extend(self._check_granularity_conflicts(dataset, units))
+        return warnings
+
+    # ─── JOIN 可达性检查 ────────────────────────────────────────────────
+
+    def _check_join_reachability(
+        self,
+        dataset: SceneDataset,
+        units: list[dict[str, object]],
+    ) -> list[str]:
+        """对每个宽表候选，检查其来源物理表是否在全局 JOIN 图中互相可达。
+
+        可达：从来源表集合中任意一张出发，能通过 JOIN 边遍历到其余所有表（连通分量为 1）。
+        不可达：来源表形成多个孤立连通分量 → 报告哪些表孤立，字段来自哪里。
+        """
+        join_graph: dict[str, dict[str, list]] = dataset.meta.get("join_graph", {})
+        if not join_graph:
+            return []
+
+        warnings: list[str] = []
+        items = dataset.items
+        item_lookup = {item.id: item for item in items}
+
+        for unit in units:
+            unit_name = str(unit["name"])
+            item_ids: list[str] = list(unit["item_ids"])
+
+            # 收集该宽表中所有字段的来源物理表
+            source_tables: set[str] = set()
+            for item_id in item_ids:
+                item = item_lookup.get(item_id)
+                if item and item.group and item.group != "unknown":
+                    source_tables.add(item.group)
+
+            if len(source_tables) <= 1:
+                continue  # 单表宽表，无需检查
+
+            # BFS 连通性检查
+            components = self._find_connected_components(source_tables, join_graph)
+            if len(components) > 1:
+                isolated_tables = [t for comp in components[1:] for t in comp]
+                # 找到孤立表对应的字段
+                isolated_fields = [
+                    item_lookup[iid].name
+                    for iid in item_ids
+                    if item_lookup.get(iid) and item_lookup[iid].group in isolated_tables
+                ][:5]
+                field_hint = "、".join(isolated_fields) if isolated_fields else "（字段未知）"
+                warnings.append(
+                    f"⚠ 宽表 `{unit_name}` 来源表 {sorted(source_tables)} 中，"
+                    f"{isolated_tables} 在 JOIN 图中孤立，"
+                    f"字段 {field_hint} 等无法通过已知 JOIN 条件与主表关联。"
+                    f"建议检查是否缺少 JOIN 条件或添加桥接表。"
+                )
+
+        return warnings
+
+    def _find_connected_components(
+        self,
+        nodes: set[str],
+        graph: dict[str, dict[str, list]],
+    ) -> list[list[str]]:
+        """BFS 找出节点集合在图中的所有连通分量。"""
+        visited: set[str] = set()
+        components: list[list[str]] = []
+        node_list = sorted(nodes)
+        for start in node_list:
+            if start in visited:
+                continue
+            component: list[str] = []
+            queue: deque[str] = deque([start])
+            visited.add(start)
+            while queue:
+                cur = queue.popleft()
+                component.append(cur)
+                for neighbor in graph.get(cur, {}):
+                    if neighbor in nodes and neighbor not in visited:
+                        visited.add(neighbor)
+                        queue.append(neighbor)
+            components.append(component)
+        return components
+
+    # ─── 粒度冲突检查 ───────────────────────────────────────────────────
+
+    def _check_granularity_conflicts(
+        self,
+        dataset: SceneDataset,
+        units: list[dict[str, object]],
+    ) -> list[str]:
+        """对每个宽表候选，检查其来源 SQL 的粒度键是否兼容。
+
+        兼容定义：来源 SQL 的粒度键集合存在非空交集（共享维度）或其中一方是子集（可汇总）。
+        冲突：所有来源 SQL 的粒度键集合两两不相交 → 说明字段来自不同统计粒度，合并后可能产生笛卡尔积或数据误读。
+        """
+        granularity_map: dict[str, list[str]] = dataset.meta.get("granularity_map", {})
+        if not granularity_map:
+            return []
+
+        warnings: list[str] = []
+        items = dataset.items
+        item_lookup = {item.id: item for item in items}
+        entities = {e.id: e.name for e in dataset.entities}
+
+        for unit in units:
+            unit_name = str(unit["name"])
+            covered_entity_ids: list[str] = list(unit["covered_entity_ids"])
+
+            # 找到该宽表覆盖的 SQL 文件名（entity.name）
+            covered_sql_names = [entities.get(eid, "") for eid in covered_entity_ids]
+
+            # 获取每个 SQL 的粒度键
+            unit_granularities: dict[str, list[str]] = {}
+            for sql_name in covered_sql_names:
+                if sql_name in granularity_map:
+                    unit_granularities[sql_name] = granularity_map[sql_name]
+
+            if len(unit_granularities) < 2:
+                continue  # 少于2个有粒度信息的 SQL，无法比较
+
+            # 检查所有 SQL 粒度键是否有交集
+            sets = [set(keys) for keys in unit_granularities.values()]
+            conflict_pairs: list[str] = []
+            sql_names = list(unit_granularities.keys())
+            for i, j in combinations(range(len(sql_names)), 2):
+                if not (sets[i] & sets[j]):  # 交集为空 → 粒度不兼容
+                    conflict_pairs.append(
+                        f"{sql_names[i]}({', '.join(sorted(sets[i]))}) vs "
+                        f"{sql_names[j]}({', '.join(sorted(sets[j]))})"
+                    )
+
+            if conflict_pairs:
+                warnings.append(
+                    f"⚠ 宽表 `{unit_name}` 合并了来自不同粒度的 SQL：{'; '.join(conflict_pairs[:3])}。"
+                    f"建议拆分宽表或统一到相同的 GROUP BY 粒度后再合并。"
+                )
+
         return warnings
 
     def _build_insights(
@@ -443,9 +598,10 @@ class SetMinerService:
         largest_unit = max(units, key=lambda unit: len(unit["item_ids"]))
         most_reused = max(units, key=lambda unit: len(unit["covered_entity_ids"]))
         sample_sources = [item_lookup[item_id].source for item_id in largest_unit["item_ids"] if item_lookup[item_id].source]
+        item_term = "权限" if dataset.scene == "erp" else "字段"
         insights = [
             f"推荐优先落地 `{most_reused['name']}`，它是复用度最高的{unit_type}。",
-            f"`{largest_unit['name']}` 包含最多的字段/权限，适合作为核心{unit_type}模板。",
+            f"`{largest_unit['name']}` 包含最多的{item_term}，适合作为核心{unit_type}模板。",
         ]
         if dataset.scene == "sql" and sample_sources:
             insights.append(f"字段来源主要集中在 {', '.join(sorted(set(sample_sources)))}，说明可先围绕该主题域建表。")
