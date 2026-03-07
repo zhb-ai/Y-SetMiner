@@ -157,3 +157,43 @@ SQL 场景支持一次上传多个 `.sql` 文件，系统会提取：
 - `demo_sql/cte_customer_metrics.sql`
 - `demo_sql/subquery_refund_ratio.sql`
 
+## AI 模型配置
+
+如需接入 AI 大模型进行分析，请在项目根目录创建 `.env` 文件（可参考 `.env.example`）。
+
+配置格式如下：
+
+```env
+{NAME}_ENABLED=true
+{NAME}_ENDPOINT=openai
+{NAME}_API_KEY=your_api_key_here
+{NAME}_API_BASE=https://api.example.com/v1
+{NAME}_MODELS=model-name-1,model-name-2
+```
+
+示例（DeepSeek）：
+
+```env
+DEEPSEEK_ENABLED=true
+DEEPSEEK_ENDPOINT=openai
+DEEPSEEK_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+DEEPSEEK_API_BASE=https://api.deepseek.com
+DEEPSEEK_MODELS=deepseek-chat
+```
+
+示例（阿里云百炼 / Qwen）：
+
+```env
+QWEN_ENABLED=true
+QWEN_ENDPOINT=openai
+QWEN_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+QWEN_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
+QWEN_MODELS=qwen3-omni-flash,qwen3.5-plus,qwen3.5-flash
+```
+
+说明：
+
+- 每个 provider 独立一组配置，互不干扰
+- 密钥仅存于服务端，不会发送到前端
+- 支持多个 provider 同时启用
+
