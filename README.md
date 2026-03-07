@@ -157,6 +157,11 @@ SQL 场景支持一次上传多个 `.sql` 文件，系统会提取：
 - `demo_sql/cte_customer_metrics.sql`
 - `demo_sql/subquery_refund_ratio.sql`
 
+重要说明：
+
+- **不要直接上传视图定义文件**：如果 SQL 中引用了视图，请同时提供视图的原始 SQL，以便分析真正的底层原始表
+- **禁止使用 `SELECT *`**：必须显式指定列名，如 `SELECT col1, col2, col3 FROM table`，否则无法准确识别字段归属
+
 ## AI 模型配置
 
 如需接入 AI 大模型进行分析，请在项目根目录创建 `.env` 文件（可参考 `.env.example`）。
