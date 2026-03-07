@@ -311,11 +311,25 @@ class SetMinerService:
             item_indices = unit["item_indices"]
             entity_indices = unit["entity_indices"]
             unit_items = [items[item_idx] for item_idx in item_indices]
-            groups = Counter(item.group or "通用" for item in unit_items)
-            top_group = groups.most_common(1)[0][0]
+            groups = Counter(
+                item.group
+                for item in unit_items
+                if item.group and item.group != "unknown"
+            )
+            if groups:
+                top_group = groups.most_common(1)[0][0]
+            else:
+                fallback_groups = Counter(item.group or "通用" for item in unit_items)
+                top_group = fallback_groups.most_common(1)[0][0]
             top_names = "、".join(item.name for item in unit_items[:2])
             name = f"{top_group}{label_prefix}{idx}"
-            sources = sorted({item.source for item in unit_items if item.source})
+            sources = sorted(
+                {
+                    item.source
+                    for item in unit_items
+                    if item.source and item.source != "unknown"
+                }
+            )
             rationale = f"覆盖 {len(entity_indices)} 个实体，核心{item_term}为 {top_names}。"
             decorated.append(
                 {

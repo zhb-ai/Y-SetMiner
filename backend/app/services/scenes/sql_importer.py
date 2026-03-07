@@ -108,7 +108,6 @@ class SqlImportService:
         覆盖场景：
         - NC 用友 / Superset：#变量名# 动态参数占位符 → 替换为合法字符串字面量 'NC_PARAM'
         - Oracle DB Link 跨库引用：TABLE@dblink → TABLE（去掉 @dblink 部分）
-        - 裸中文列别名（不带引号）：col 中文 → col（去掉中文别名，保留字段表达式）
         - 末尾多余分号
         """
         # 1. NC/用友 动态参数 #varname# → 'NC_PARAM'
@@ -116,11 +115,6 @@ class SqlImportService:
 
         # 2. Oracle DB Link：table@dblink 或 schema.table@dblink → 去掉 @dblink
         sql = re.sub(r"(@\w+)", "", sql)
-
-        # 3. 裸中文别名：紧跟在字段表达式后面的中文词（无逗号/关键字分隔）
-        #    例：cu.custname 客户  →  cu.custname
-        #    注意：不能破坏 CASE WHEN 里的中文字符串字面量（已用引号包裹，不匹配）
-        sql = re.sub(r"(?<=[)\w])\s+([\u4e00-\u9fff][\u4e00-\u9fff\w（）()]*)", " ", sql)
 
         return sql
 
@@ -554,8 +548,15 @@ class SqlImportService:
                         }
             elif isinstance(source, exp.Subquery):
                 alias = source.alias_or_name
-                if alias and alias not in alias_map:
-                    alias_map[alias] = {
+                if alias:
+                    if alias not in alias_map:
+                        alias_map[alias] = {
+                            "type": "subquery",
+                            "expression": source.this,
+                        }
+                else:
+                    anonymous_key = f"__subquery_{len(alias_map)}"
+                    alias_map[anonymous_key] = {
                         "type": "subquery",
                         "expression": source.this,
                     }
@@ -654,6 +655,20 @@ class SqlImportService:
             base_table = next(iter(base_tables))
             return {"tables": {base_table}, "columns": {f"{base_table}.{column_name}"}}
 
+        # 当前层没有显式表前缀、也没有唯一真实表时，若只有一个子查询/CTE 来源，
+        # 继续向内层投影追踪来源。典型场景：SELECT col1, col2 FROM (subquery) m
+        nested_sources = [
+            info["expression"]
+            for info in alias_map.values()
+            if info["type"] in {"cte", "subquery"}
+        ]
+        if not base_tables and len(nested_sources) == 1:
+            return self._resolve_from_nested_query(
+                nested_sources[0],
+                column_name,
+                cte_map,
+            )
+
         return {"tables": set(), "columns": {column_name}}
 
     def _resolve_from_nested_query(
@@ -662,7 +677,7 @@ class SqlImportService:
         requested_name: str,
         cte_map: dict[str, exp.Expression],
     ) -> dict[str, set[str]]:
-        select_expr = nested_expression.find(exp.Select)
+        select_expr = nested_expression if isinstance(nested_expression, exp.Select) else nested_expression.find(exp.Select)
         if select_expr is None:
             return {"tables": set(), "columns": {requested_name}}
 
@@ -675,6 +690,35 @@ class SqlImportService:
                     "tables": set(resolved.source_tables),
                     "columns": set(resolved.source_columns or [requested_name]),
                 }
+
+        # 处理 SELECT ma.*, extra_col ... FROM base ma 这类“星号透传”场景：
+        # 若当前层未显式投影 requested_name，但存在 table.* / *，则继续回落到唯一来源。
+        has_star_projection = any(
+            isinstance(projection, exp.Star)
+            or (isinstance(projection, exp.Column) and projection.name == "*")
+            for projection in select_expr.expressions
+        )
+        if has_star_projection:
+            base_tables = [
+                str(info["table"])
+                for info in nested_alias_map.values()
+                if info["type"] == "table"
+            ]
+            if len(set(base_tables)) == 1:
+                base_table = base_tables[0]
+                return {"tables": {base_table}, "columns": {f"{base_table}.{requested_name}"}}
+
+            nested_sources = [
+                info["expression"]
+                for info in nested_alias_map.values()
+                if info["type"] in {"cte", "subquery"}
+            ]
+            if len(nested_sources) == 1:
+                return self._resolve_from_nested_query(
+                    nested_sources[0],
+                    requested_name,
+                    cte_map,
+                )
 
         return {"tables": set(), "columns": {requested_name}}
 
