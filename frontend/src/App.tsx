@@ -529,10 +529,12 @@ function App() {
                   }}
                 />
                 {sqlFiles.length > 0 ? (
-                  <div className="upload-drop-selected">
+                  <div className="upload-drop-selected upload-drop-selected--files">
                     <span className="upload-drop-icon">✓</span>
                     <Text style={{ fontSize: 12, color: '#389e0d', fontWeight: 500 }}>已选 {sqlFiles.length} 个文件</Text>
-                    <Text style={{ fontSize: 11, color: '#8c8c8c' }}>{sqlFiles.map((f) => f.name).join('、')}</Text>
+                    <div className="upload-file-list" title={sqlFiles.map((f) => f.name).join('、')}>
+                      <Text style={{ fontSize: 11, color: '#8c8c8c' }}>{sqlFiles.map((f) => f.name).join('、')}</Text>
+                    </div>
                     <Text style={{ fontSize: 11, color: '#bfbfbf' }}>点击重新选择</Text>
                   </div>
                 ) : (

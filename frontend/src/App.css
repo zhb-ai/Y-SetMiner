@@ -147,6 +147,19 @@
   padding: 12px;
 }
 
+.upload-drop-selected--files {
+  max-height: 120px;
+}
+
+.upload-file-list {
+  max-height: 44px;
+  overflow-y: auto;
+  width: 100%;
+  text-align: center;
+  padding: 0 4px;
+  word-break: break-all;
+}
+
 .upload-drop-icon {
   display: inline-flex;
   align-items: center;

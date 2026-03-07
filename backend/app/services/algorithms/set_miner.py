@@ -21,7 +21,6 @@ from app.services.graph.graph_builder import build_erp_graph, build_sql_graph
 from app.services.matrix.builder import build_matrix
 from app.services.algorithms.sql_unit_hierarchy import (
     build_extension_delta,
-    choose_base_candidate_for_unit,
     get_real_unit_source_counter,
     get_real_unit_sources,
     mine_sql_base_candidates,
@@ -557,30 +556,32 @@ class SetMinerService:
 
         decorated_by_id = {str(unit["id"]): {**unit} for unit in units}
         raw_by_id = {str(unit["id"]): unit for unit in units}
-        assigned_groups: dict[tuple[str, ...], list[str]] = {}
-        unit_to_candidate = {}
-
-        for unit in units:
-            candidate = choose_base_candidate_for_unit(dataset, unit, candidates)
-            if candidate is None:
-                continue
-            unit_id = str(unit["id"])
-            unit_to_candidate[unit_id] = candidate
-            assigned_groups.setdefault(candidate.source_subset, []).append(unit_id)
-
         groups: list[dict[str, object]] = []
         assigned_unit_ids: set[str] = set()
 
         for candidate in candidates:
-            member_ids = assigned_groups.get(candidate.source_subset, [])
+            member_ids = [
+                member_id
+                for member_id in candidate.support_unit_ids
+                if member_id not in assigned_unit_ids
+            ]
             if len(member_ids) < 2:
+                continue
+
+            exact_match_ids = [
+                member_id
+                for member_id in member_ids
+                if self._get_unit_source_signature(dataset, raw_by_id[member_id]) == candidate.source_subset
+            ]
+            extension_member_ids = [member_id for member_id in member_ids if member_id not in exact_match_ids]
+            if not extension_member_ids and len(exact_match_ids) < 3:
                 continue
 
             base_name = "+".join(candidate.source_subset)
             base_unit_id = None
             base_unit = None
 
-            for member_id in member_ids:
+            for member_id in exact_match_ids:
                 raw_unit = raw_by_id[member_id]
                 if self._get_unit_source_signature(dataset, raw_unit) != candidate.source_subset:
                     continue

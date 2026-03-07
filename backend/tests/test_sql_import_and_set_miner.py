@@ -232,6 +232,50 @@ class SetMinerServiceSqlUnitTests(unittest.TestCase):
             constraints=ConstraintConfig(max_items_per_unit=20, max_units_per_entity=3),
         )
 
+    def _build_fallback_base_dataset(self) -> SceneDataset:
+        items = [
+            Item(id="a::id", name="id", group="table_a", source="table_a"),
+            Item(id="a::name", name="name", group="table_a", source="table_a"),
+            Item(id="b::id", name="biz_id", group="table_b", source="table_b"),
+            Item(id="b::name", name="biz_name", group="table_b", source="table_b"),
+            Item(id="c::flag", name="c_flag", group="table_c", source="table_c"),
+            Item(id="d::flag", name="d_flag", group="table_d", source="table_d"),
+            Item(id="e::flag", name="e_flag", group="table_e", source="table_e"),
+        ]
+        return SceneDataset(
+            scene="sql",
+            entities=[
+                Entity(id="sql_1", name="sql_1.sql"),
+                Entity(id="sql_2", name="sql_2.sql"),
+                Entity(id="sql_3", name="sql_3.sql"),
+                Entity(id="sql_4", name="sql_4.sql"),
+            ],
+            items=items,
+            relations=[
+                Relation(entity_id="sql_1", item_id="a::id"),
+                Relation(entity_id="sql_1", item_id="a::name"),
+                Relation(entity_id="sql_1", item_id="b::id"),
+                Relation(entity_id="sql_1", item_id="b::name"),
+                Relation(entity_id="sql_1", item_id="c::flag"),
+                Relation(entity_id="sql_2", item_id="a::id"),
+                Relation(entity_id="sql_2", item_id="a::name"),
+                Relation(entity_id="sql_2", item_id="b::id"),
+                Relation(entity_id="sql_2", item_id="b::name"),
+                Relation(entity_id="sql_2", item_id="d::flag"),
+                Relation(entity_id="sql_3", item_id="a::id"),
+                Relation(entity_id="sql_3", item_id="a::name"),
+                Relation(entity_id="sql_3", item_id="b::id"),
+                Relation(entity_id="sql_3", item_id="b::name"),
+                Relation(entity_id="sql_3", item_id="e::flag"),
+                Relation(entity_id="sql_4", item_id="a::id"),
+                Relation(entity_id="sql_4", item_id="a::name"),
+                Relation(entity_id="sql_4", item_id="b::id"),
+                Relation(entity_id="sql_4", item_id="b::name"),
+                Relation(entity_id="sql_4", item_id="c::flag"),
+            ],
+            constraints=ConstraintConfig(max_items_per_unit=20, max_units_per_entity=3),
+        )
+
     def test_sql_unit_name_uses_combination_name_for_multi_source_unit(self) -> None:
         dataset = self._build_dataset(
             [
@@ -412,6 +456,25 @@ class SetMinerServiceSqlUnitTests(unittest.TestCase):
         self.assertTrue(any("扩展宽表" in item for item in result.insights))
         self.assertFalse(any("unknown" in item for item in result.insights))
         self.assertFalse(any("derived" in item for item in result.insights))
+
+    def test_build_sql_unit_groups_prefers_high_support_small_core_base(self) -> None:
+        dataset = self._build_fallback_base_dataset()
+        units = [
+            {"id": "unit-c1", "item_indices": [0, 1, 2, 3, 4], "entity_indices": [0], "score": 5.0},
+            {"id": "unit-d", "item_indices": [0, 1, 2, 3, 5], "entity_indices": [1], "score": 5.0},
+            {"id": "unit-e", "item_indices": [0, 1, 2, 3, 6], "entity_indices": [2], "score": 5.0},
+            {"id": "unit-c2", "item_indices": [0, 1, 2, 3, 4], "entity_indices": [3], "score": 5.0},
+        ]
+
+        decorated = self.service._decorate_units(dataset, self._matrix(4, 7), units)
+        final_units, groups = self.service._build_sql_unit_groups(dataset, self._matrix(4, 7), decorated)
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["base_unit"]["name"], "table_a+table_b基础宽表")
+        self.assertEqual(groups[0]["base_unit"]["unit_level"], "base")
+        self.assertEqual(len(groups[0]["units"]), 4)
+        self.assertTrue(any(unit["name"] == "table_a+table_b扩展宽表(+table_c)" for unit in groups[0]["units"]))
+        self.assertEqual({unit["unit_level"] for unit in final_units}, {"extension"})
 
     @staticmethod
     def _matrix(rows: int, cols: int):
