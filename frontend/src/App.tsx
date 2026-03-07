@@ -43,6 +43,65 @@ const ERP_COLS_OPTIONAL = [
   'permission_level', 'sod_conflict_code', 'sod_conflict_level', 'permission_path',
 ]
 
+type WarningGroupKey = 'auto_fix' | 'warning' | 'excluded' | 'other'
+
+function classifyWarning(item: string): WarningGroupKey {
+  if (item.startsWith('[自动修复]')) return 'auto_fix'
+  if (item.startsWith('[警告]')) return 'warning'
+  if (item.startsWith('[排除]')) return 'excluded'
+  if (item.startsWith('⚠')) return 'warning'
+  return 'other'
+}
+
+function WarningGroups({ warnings, emptyText }: { warnings: string[]; emptyText: string }) {
+  if (warnings.length === 0) {
+    return <Text type="secondary" style={{ fontSize: 12 }}>{emptyText}</Text>
+  }
+
+  const grouped = warnings.reduce<Record<WarningGroupKey, string[]>>((acc, item) => {
+    acc[classifyWarning(item)].push(item)
+    return acc
+  }, {
+    auto_fix: [],
+    warning: [],
+    excluded: [],
+    other: [],
+  })
+
+  const sections: Array<{ key: WarningGroupKey; title: string; type: 'success' | 'warning' | 'error' | 'info'; items: string[] }> = [
+    { key: 'auto_fix', title: '自动修复', type: 'success', items: grouped.auto_fix },
+    { key: 'warning', title: '警告', type: 'warning', items: grouped.warning },
+    { key: 'excluded', title: '排除', type: 'error', items: grouped.excluded },
+    { key: 'other', title: '其他提示', type: 'info', items: grouped.other },
+  ]
+
+  return (
+    <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
+      {sections.filter((section) => section.items.length > 0).map((section) => (
+        <Card
+          key={section.key}
+          size="small"
+          type="inner"
+          title={<span style={{ fontSize: 12, fontWeight: 600 }}>{section.title}</span>}
+          styles={{ body: { padding: 10 } }}
+        >
+          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+            {section.items.map((item, idx) => (
+              <Alert
+                key={`${section.key}-${idx}`}
+                type={section.type}
+                showIcon
+                message={<span style={{ fontSize: 12 }}>{item}</span>}
+                style={{ padding: '4px 8px' }}
+              />
+            ))}
+          </Space>
+        </Card>
+      ))}
+    </Space>
+  )
+}
+
 function App() {
   const [scenes, setScenes] = useState<SceneInfo[]>([])
   const [scene, setScene] = useState<SceneKey>('erp')
@@ -406,12 +465,7 @@ function App() {
                     <Tag key={k} style={{ fontSize: 10 }}>{k}→{v}</Tag>
                   ))}
                 </Text>
-                <List
-                  size="small"
-                  dataSource={preview.warnings}
-                  locale={{ emptyText: '文件结构良好' }}
-                  renderItem={(item) => <List.Item style={{ fontSize: 12 }}>{item}</List.Item>}
-                />
+                <WarningGroups warnings={preview.warnings} emptyText="文件结构良好" />
               </Card>
             )}
           </Space>
@@ -478,12 +532,7 @@ function App() {
                   <Descriptions.Item label="字段数">{preview.item_count}</Descriptions.Item>
                   <Descriptions.Item label="引用关系">{preview.relation_count}</Descriptions.Item>
                 </Descriptions>
-                <List
-                  size="small"
-                  dataSource={preview.warnings}
-                  locale={{ emptyText: '文件结构良好' }}
-                  renderItem={(item) => <List.Item style={{ fontSize: 12 }}>{item}</List.Item>}
-                />
+                <WarningGroups warnings={preview.warnings} emptyText="文件结构良好" />
               </Card>
             )}
           </Space>
@@ -548,30 +597,7 @@ function App() {
                       </Col>
                       <Col xs={24} lg={12}>
                         <Card size="small" title="风险与后续建议">
-                          <List
-                            size="small"
-                            dataSource={result.warnings}
-                            locale={{ emptyText: '当前无额外风险提示' }}
-                            renderItem={(item) => {
-                              const isJoinWarn = item.startsWith('⚠ 宽表') && item.includes('孤立');
-                              const isGranWarn = item.startsWith('⚠ 宽表') && item.includes('粒度');
-                              const isWarn = isJoinWarn || isGranWarn;
-                              return (
-                                <List.Item style={{ padding: '4px 0' }}>
-                                  {isWarn ? (
-                                    <Alert
-                                      type={isJoinWarn ? 'error' : 'warning'}
-                                      showIcon
-                                      message={<span style={{ fontSize: 12 }}>{item}</span>}
-                                      style={{ width: '100%', padding: '4px 8px' }}
-                                    />
-                                  ) : (
-                                    <span>{item}</span>
-                                  )}
-                                </List.Item>
-                              );
-                            }}
-                          />
+                          <WarningGroups warnings={result.warnings} emptyText="当前无额外风险提示" />
                         </Card>
                       </Col>
                     </Row>

@@ -34,6 +34,7 @@ class ParsedSqlDocument:
     join_edges: list[JoinEdge] = field(default_factory=list)
     granularity_keys: list[str] = field(default_factory=list)  # GROUP BY 列，推断粒度键
     alias_to_table: dict[str, str] = field(default_factory=dict)  # {别名/短名 -> 真实物理表名}
+    import_notes: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -47,9 +48,9 @@ class ResolvedField:
 
 class SqlImportService:
     async def preview_uploads(self, files: list[UploadFile]) -> ImportPreviewResponse:
-        documents = await self._parse_uploads(files)
-        dataset = self._build_dataset(documents)
-        warnings = self._build_warnings(documents, dataset)
+        documents, import_warnings = await self._parse_uploads(files)
+        dataset = self._build_dataset(documents, import_warnings=import_warnings)
+        warnings = import_warnings + self._build_warnings(documents, dataset)
         return ImportPreviewResponse(
             scene="sql",
             entity_count=len(dataset.entities),
@@ -66,15 +67,16 @@ class SqlImportService:
         )
 
     async def solve_uploads(self, files: list[UploadFile]) -> SceneDataset:
-        documents = await self._parse_uploads(files)
-        return self._build_dataset(documents)
+        documents, import_warnings = await self._parse_uploads(files)
+        return self._build_dataset(documents, import_warnings=import_warnings)
 
-    async def _parse_uploads(self, files: list[UploadFile]) -> list[ParsedSqlDocument]:
+    async def _parse_uploads(self, files: list[UploadFile]) -> tuple[list[ParsedSqlDocument], list[str]]:
         if not files:
             raise HTTPException(status_code=400, detail="请至少上传一个 .sql 或 .txt 文件。")
 
         documents: list[ParsedSqlDocument] = []
         parse_errors: list[str] = []
+        import_warnings: list[str] = []
         for upload in files:
             filename = upload.filename or ""
             if not filename.lower().endswith(SUPPORTED_SQL_SUFFIXES):
@@ -83,7 +85,15 @@ class SqlImportService:
             raw = await upload.read()
             content = self._decode_sql(raw)
             try:
-                documents.append(self._parse_sql_document(filename, content))
+                document = self._parse_sql_document(filename, content)
+                exclusion_reason = self._get_document_exclusion_reason(document)
+                if exclusion_reason:
+                    import_warnings.append(f"[排除] `{filename}` {exclusion_reason}")
+                    continue
+
+                import_warnings.extend(f"[自动修复] `{filename}` {note}" for note in document.import_notes)
+                import_warnings.extend(self._build_document_import_warnings(document))
+                documents.append(document)
             except Exception as exc:
                 parse_errors.append(f"{filename}: {exc}")
 
@@ -91,8 +101,10 @@ class SqlImportService:
             detail = "未解析到有效的 SQL 文件。"
             if parse_errors:
                 detail += " 解析错误：" + "；".join(parse_errors)
+            elif import_warnings:
+                detail += " 导入结果：" + "；".join(import_warnings)
             raise HTTPException(status_code=400, detail=detail)
-        return documents
+        return documents, import_warnings
 
     def _decode_sql(self, raw: bytes) -> str:
         for encoding in ("utf-8-sig", "utf-8", "gbk", "gb2312"):
@@ -102,7 +114,7 @@ class SqlImportService:
                 continue
         raise HTTPException(status_code=400, detail="SQL 文件编码无法识别，请保存为 UTF-8 或 GBK。")
 
-    def _sanitize_vendor_sql(self, sql: str) -> str:
+    def _sanitize_vendor_sql(self, sql: str) -> tuple[str, list[str]]:
         """处理 ERP/BI 平台特有的非标准语法，使 sqlglot 和正则解析器能正常处理。
 
         覆盖场景：
@@ -110,22 +122,44 @@ class SqlImportService:
         - Oracle DB Link 跨库引用：TABLE@dblink → TABLE（去掉 @dblink 部分）
         - 末尾多余分号
         """
+        notes: list[str] = []
+
         # 1. NC/用友 动态参数 #varname# → 'NC_PARAM'
-        sql = re.sub(r"#[^#\s]+#", "'NC_PARAM'", sql)
+        replaced_sql = re.sub(r"#[^#\s]+#", "'NC_PARAM'", sql)
+        if replaced_sql != sql:
+            notes.append("检测到动态参数占位符，已自动替换为可解析字面量。")
+        sql = replaced_sql
 
         # 2. Oracle DB Link：table@dblink 或 schema.table@dblink → 去掉 @dblink
-        sql = re.sub(r"(@\w+)", "", sql)
+        replaced_sql = re.sub(r"(@\w+)", "", sql)
+        if replaced_sql != sql:
+            notes.append("检测到 DB Link 语法，已自动去除跨库后缀。")
+        sql = replaced_sql
 
-        return sql
+        # 3. 全角标点标准化，避免 `from （subquery）` 之类被解析成异常来源
+        translation_map = str.maketrans({
+            "（": "(",
+            "）": ")",
+            "，": ",",
+            "；": ";",
+        })
+        normalized_sql = sql.translate(translation_map)
+        if normalized_sql != sql:
+            notes.append("检测到全角括号或标点，已自动标准化。")
+        sql = normalized_sql
+
+        return sql, notes
 
     def _parse_sql_document(self, filename: str, content: str) -> ParsedSqlDocument:
         cleaned = self._remove_comments(content)
-        cleaned = self._sanitize_vendor_sql(cleaned)
+        cleaned, import_notes = self._sanitize_vendor_sql(cleaned)
         normalized = " ".join(cleaned.split()).strip().rstrip(";")
 
         try:
             expression = parse_one(normalized, error_level="raise")
-            return self._parse_with_ast(filename, content, expression)
+            document = self._parse_with_ast(filename, content, expression)
+            document.import_notes = import_notes
+            return document
         except Exception:
             alias_map, joins = self._extract_tables_and_aliases(normalized)
             columns = self._extract_columns_by_regex(normalized, alias_map)
@@ -137,6 +171,7 @@ class SqlImportService:
                 columns=columns,
                 joins=joins,
                 parser="regex_fallback",
+                import_notes=import_notes,
             )
 
     def _parse_with_ast(self, filename: str, content: str, expression: exp.Expression) -> ParsedSqlDocument:
@@ -473,7 +508,7 @@ class SqlImportService:
             # 跳过 SELECT * 本身（穿透失败时的兜底）
             if isinstance(projection, exp.Star):
                 continue
-            field = self._resolve_projection(projection, alias_map, cte_map)
+            field = self._resolve_projection(projection, alias_map, cte_map, outermost_select)
             # 过滤掉无效字段名（空字符串、纯符号如 "." "," 等）
             if not field.field_name or not re.search(r"[A-Za-z0-9_\u4e00-\u9fff]", field.field_name):
                 continue
@@ -567,6 +602,7 @@ class SqlImportService:
         projection: exp.Expression,
         alias_map: dict[str, dict[str, object]],
         cte_map: dict[str, exp.Expression],
+        scope_expression: exp.Expression | None = None,
     ) -> ResolvedField:
         # 原始 SQL 表达式（用于 Tooltip 展示）
         raw_expr = projection.sql(dialect="")
@@ -601,7 +637,7 @@ class SqlImportService:
         lineage_columns: set[str] = set()
 
         for column in projection.find_all(exp.Column):
-            resolved = self._resolve_column(column, alias_map, cte_map)
+            resolved = self._resolve_column(column, alias_map, cte_map, scope_expression=scope_expression)
             lineage_tables.update(resolved["tables"])
             lineage_columns.update(resolved["columns"])
 
@@ -609,6 +645,8 @@ class SqlImportService:
         if len(lineage_tables) == 1:
             primary_source = next(iter(lineage_tables))
         elif len(lineage_tables) > 1:
+            primary_source = "derived"
+        elif not isinstance(projection, exp.Column):
             primary_source = "derived"
 
         return ResolvedField(
@@ -624,6 +662,7 @@ class SqlImportService:
         column: exp.Column,
         alias_map: dict[str, dict[str, object]],
         cte_map: dict[str, exp.Expression],
+        scope_expression: exp.Expression | None = None,
     ) -> dict[str, set[str]]:
         table_alias = column.table
         column_name = column.name
@@ -655,6 +694,35 @@ class SqlImportService:
             base_table = next(iter(base_tables))
             return {"tables": {base_table}, "columns": {f"{base_table}.{column_name}"}}
 
+        nested_candidates: list[dict[str, set[str]]] = []
+        for info in alias_map.values():
+            if info["type"] not in {"cte", "subquery"}:
+                continue
+            resolved = self._resolve_from_nested_query(
+                info["expression"],
+                column_name,
+                cte_map,
+            )
+            if resolved["tables"]:
+                nested_candidates.append(resolved)
+        unique_nested_tables = {tuple(sorted(candidate["tables"])) for candidate in nested_candidates}
+        if len(unique_nested_tables) == 1 and nested_candidates:
+            return nested_candidates[0]
+
+        if scope_expression is not None:
+            scope_candidates = self._resolve_bare_column_from_scope(
+                column_name,
+                alias_map,
+                cte_map,
+                scope_expression,
+            )
+            if scope_candidates["tables"]:
+                return scope_candidates
+
+        guessed_table = self._guess_base_table_for_bare_column(column_name, alias_map)
+        if guessed_table:
+            return {"tables": {guessed_table}, "columns": {f"{guessed_table}.{column_name}"}}
+
         # 当前层没有显式表前缀、也没有唯一真实表时，若只有一个子查询/CTE 来源，
         # 继续向内层投影追踪来源。典型场景：SELECT col1, col2 FROM (subquery) m
         nested_sources = [
@@ -671,6 +739,96 @@ class SqlImportService:
 
         return {"tables": set(), "columns": {column_name}}
 
+    def _resolve_bare_column_from_scope(
+        self,
+        column_name: str,
+        alias_map: dict[str, dict[str, object]],
+        cte_map: dict[str, exp.Expression],
+        scope_expression: exp.Expression,
+    ) -> dict[str, set[str]]:
+        candidates: list[dict[str, set[str]]] = []
+
+        for scoped_column in scope_expression.find_all(exp.Column):
+            if scoped_column.name != column_name or not scoped_column.table:
+                continue
+            alias = scoped_column.table
+            info = alias_map.get(alias)
+            if info is None:
+                candidates.append({"tables": {alias}, "columns": {f"{alias}.{column_name}"}})
+                continue
+            if info["type"] == "table":
+                table_name = str(info["table"])
+                candidates.append({"tables": {table_name}, "columns": {f"{table_name}.{column_name}"}})
+            elif info["type"] in {"cte", "subquery"}:
+                nested = self._resolve_from_nested_query(info["expression"], column_name, cte_map)
+                if nested["tables"]:
+                    candidates.append(nested)
+
+        unique_tables = {tuple(sorted(candidate["tables"])) for candidate in candidates if candidate["tables"]}
+        if len(unique_tables) == 1 and candidates:
+            return next(candidate for candidate in candidates if candidate["tables"])
+
+        return {"tables": set(), "columns": {column_name}}
+
+    def _guess_base_table_for_bare_column(
+        self,
+        column_name: str,
+        alias_map: dict[str, dict[str, object]],
+    ) -> str:
+        ordered_base_tables = [
+            str(info["table"])
+            for info in alias_map.values()
+            if info["type"] == "table"
+        ]
+        if not ordered_base_tables:
+            return ""
+
+        column_lower = column_name.lower()
+
+        if column_lower in {"real_name", "username", "depart"}:
+            return ordered_base_tables[0]
+
+        if "station" in column_lower:
+            for table_name in ordered_base_tables:
+                if "station" in table_name.lower():
+                    return table_name
+
+        column_tokens = {token for token in re.split(r"[^a-z0-9]+", column_lower) if token}
+        scored_tables: list[tuple[int, str]] = []
+        for table_name in ordered_base_tables:
+            table_tokens = {token for token in re.split(r"[^a-z0-9]+", table_name.lower()) if token}
+            score = len(column_tokens & table_tokens)
+            if score > 0:
+                scored_tables.append((score, table_name))
+        if len(scored_tables) == 1:
+            return scored_tables[0][1]
+        if scored_tables:
+            scored_tables.sort(key=lambda item: (-item[0], item[1]))
+            if len(scored_tables) == 1 or scored_tables[0][0] > scored_tables[1][0]:
+                return scored_tables[0][1]
+
+        metric_hints = (
+            "achievement",
+            "bonus",
+            "ratio",
+            "profit",
+            "coefficient",
+            "kpi",
+            "level",
+            "num",
+            "total",
+            "month",
+            "cost",
+        )
+        if any(hint in column_lower for hint in metric_hints):
+            for table_name in ordered_base_tables[1:]:
+                lowered = table_name.lower()
+                if "station" in lowered:
+                    continue
+                return table_name
+
+        return ""
+
     def _resolve_from_nested_query(
         self,
         nested_expression: exp.Expression,
@@ -685,7 +843,7 @@ class SqlImportService:
         for projection in select_expr.expressions:
             alias = projection.alias_or_name or projection.sql(dialect="")
             if alias == requested_name:
-                resolved = self._resolve_projection(projection, nested_alias_map, cte_map)
+                resolved = self._resolve_projection(projection, nested_alias_map, cte_map, select_expr)
                 return {
                     "tables": set(resolved.source_tables),
                     "columns": set(resolved.source_columns or [requested_name]),
@@ -722,7 +880,44 @@ class SqlImportService:
 
         return {"tables": set(), "columns": {requested_name}}
 
-    def _build_dataset(self, documents: list[ParsedSqlDocument]) -> SceneDataset:
+    def _get_document_exclusion_reason(self, document: ParsedSqlDocument) -> str | None:
+        if not document.columns:
+            return "未提取到有效字段，已跳过该文件。"
+
+        unresolved_count = sum(1 for column in document.columns if not column.get("source_table"))
+        derived_count = sum(1 for column in document.columns if column.get("source_table") == "derived")
+
+        if len(document.columns) == 1 and (unresolved_count == 1 or derived_count == 1):
+            return "仅包含聚合/常量结果，无法形成可复用宽表字段，已跳过该文件。"
+
+        if unresolved_count >= max(3, int(len(document.columns) * 0.6)):
+            return "字段来源不确定比例过高，已跳过该文件。"
+
+        return None
+
+    def _build_document_import_warnings(self, document: ParsedSqlDocument) -> list[str]:
+        warnings: list[str] = []
+        unresolved_count = sum(1 for column in document.columns if not column.get("source_table"))
+        derived_count = sum(1 for column in document.columns if column.get("source_table") == "derived")
+
+        if document.parser == "regex_fallback":
+            warnings.append(f"[警告] `{document.name}` 使用了正则回退解析，建议人工复核字段来源。")
+        if unresolved_count:
+            warnings.append(
+                f"[警告] `{document.name}` 仍有 {unresolved_count} 个字段来源未确定，分析结果可能存在偏差。"
+            )
+        if derived_count:
+            warnings.append(
+                f"[警告] `{document.name}` 含 {derived_count} 个表达式/常量字段，来源已标记为 `derived`。"
+            )
+
+        return warnings
+
+    def _build_dataset(
+        self,
+        documents: list[ParsedSqlDocument],
+        import_warnings: list[str] | None = None,
+    ) -> SceneDataset:
         entities = [Entity(id=f"sql_{idx + 1}", name=document.name) for idx, document in enumerate(documents)]
 
         # 聚合所有文档的别名→真实表名映射（后出现的覆盖先出现的，以最完整的为准）
@@ -776,6 +971,7 @@ class SqlImportService:
             relations=relations,
             constraints=ConstraintConfig(max_items_per_unit=20, max_units_per_entity=3),
             meta={
+                "import_warnings": list(import_warnings or []),
                 "join_graph": join_graph,              # {table: {neighbor: [edge_info, ...]}}
                 "granularity_map": granularity_map,    # {sql_name: [key_cols]}
                 "alias_to_table": global_alias_to_table,  # 供前端/图展示使用

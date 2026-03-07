@@ -293,7 +293,128 @@ class SetMinerService:
                 }
             )
 
+        if dataset.scene == "sql":
+            selected_units = self._merge_similar_sql_units(dataset, matrix, selected_units)
+
         return self._decorate_units(dataset, matrix, selected_units)
+
+    def _get_unit_source_counter(
+        self,
+        dataset: SceneDataset,
+        unit: dict[str, object],
+    ) -> Counter[str]:
+        unit_items = [dataset.items[item_idx] for item_idx in unit["item_indices"]]
+        return Counter(
+            item.group
+            for item in unit_items
+            if item.group and item.group != "unknown"
+        )
+
+    def _get_unit_source_signature(
+        self,
+        dataset: SceneDataset,
+        unit: dict[str, object],
+    ) -> tuple[str, ...]:
+        return tuple(sorted(self._get_unit_source_counter(dataset, unit).keys()))
+
+    def _build_sql_unit_name(
+        self,
+        dataset: SceneDataset,
+        unit: dict[str, object],
+        index: int,
+    ) -> str:
+        source_signature = self._get_unit_source_signature(dataset, unit)
+        if not source_signature:
+            return f"通用宽表{index}"
+
+        canonical_name = "+".join(source_signature)
+        if len(source_signature) == 1:
+            return f"{canonical_name}宽表{index}"
+        return f"{canonical_name}组合宽表{index}"
+
+    def _should_merge_sql_units(
+        self,
+        dataset: SceneDataset,
+        left_unit: dict[str, object],
+        right_unit: dict[str, object],
+    ) -> bool:
+        left_sources = self._get_unit_source_signature(dataset, left_unit)
+        right_sources = self._get_unit_source_signature(dataset, right_unit)
+
+        # 来源集合不同，说明语义层级通常已经不同，不做硬合并。
+        if left_sources != right_sources:
+            return False
+
+        left_items = set(left_unit["item_indices"])
+        right_items = set(right_unit["item_indices"])
+        if not left_items or not right_items:
+            return False
+
+        item_overlap = len(left_items & right_items) / max(len(left_items | right_items), 1)
+        if item_overlap < 0.35:
+            return False
+
+        left_entities = set(left_unit["entity_indices"])
+        right_entities = set(right_unit["entity_indices"])
+        entity_overlap = len(left_entities & right_entities) / max(len(left_entities | right_entities), 1)
+
+        # 实体完全不同但字段又不算足够接近时，也不合并。
+        return entity_overlap > 0 or item_overlap >= 0.6
+
+    def _merge_similar_sql_units(
+        self,
+        dataset: SceneDataset,
+        matrix: np.ndarray,
+        units: list[dict[str, object]],
+    ) -> list[dict[str, object]]:
+        """保守合并高度相似的 SQL 宽表，避免同名族宽表过度碎片化。"""
+        if not units:
+            return units
+
+        # 先按来源集合粗分组，防止把“产品维表”与“销售事实宽表”合并到一起。
+        buckets: dict[tuple[str, ...], list[dict[str, object]]] = {}
+        for unit in units:
+            buckets.setdefault(self._get_unit_source_signature(dataset, unit), []).append(unit)
+
+        merged_units: list[dict[str, object]] = []
+        for bucket_units in buckets.values():
+            working_units = [
+                {
+                    **unit,
+                    "item_indices": sorted(set(unit["item_indices"])),
+                    "entity_indices": sorted(set(unit["entity_indices"])),
+                }
+                for unit in bucket_units
+            ]
+
+            changed = True
+            while changed and len(working_units) > 1:
+                changed = False
+                for left_idx in range(len(working_units)):
+                    if changed:
+                        break
+                    for right_idx in range(left_idx + 1, len(working_units)):
+                        left_unit = working_units[left_idx]
+                        right_unit = working_units[right_idx]
+                        if not self._should_merge_sql_units(dataset, left_unit, right_unit):
+                            continue
+
+                        merged_items = sorted(set(left_unit["item_indices"]) | set(right_unit["item_indices"]))
+                        merged_entities = sorted(set(left_unit["entity_indices"]) | set(right_unit["entity_indices"]))
+                        gain = int(matrix[np.ix_(merged_entities, merged_items)].sum())
+                        working_units[left_idx] = {
+                            "id": f"{left_unit['id']}__{right_unit['id']}",
+                            "item_indices": merged_items,
+                            "entity_indices": merged_entities,
+                            "score": round(gain / max(len(merged_items), 1), 2),
+                        }
+                        del working_units[right_idx]
+                        changed = True
+                        break
+
+            merged_units.extend(working_units)
+
+        return merged_units
 
     def _decorate_units(
         self,
@@ -311,18 +432,7 @@ class SetMinerService:
             item_indices = unit["item_indices"]
             entity_indices = unit["entity_indices"]
             unit_items = [items[item_idx] for item_idx in item_indices]
-            groups = Counter(
-                item.group
-                for item in unit_items
-                if item.group and item.group != "unknown"
-            )
-            if groups:
-                top_group = groups.most_common(1)[0][0]
-            else:
-                fallback_groups = Counter(item.group or "通用" for item in unit_items)
-                top_group = fallback_groups.most_common(1)[0][0]
             top_names = "、".join(item.name for item in unit_items[:2])
-            name = f"{top_group}{label_prefix}{idx}"
             sources = sorted(
                 {
                     item.source
@@ -330,6 +440,20 @@ class SetMinerService:
                     if item.source and item.source != "unknown"
                 }
             )
+            if dataset.scene == "sql":
+                name = self._build_sql_unit_name(dataset, unit, idx)
+            else:
+                groups = Counter(
+                    item.group
+                    for item in unit_items
+                    if item.group and item.group != "unknown"
+                )
+                if groups:
+                    top_group = groups.most_common(1)[0][0]
+                else:
+                    fallback_groups = Counter(item.group or "通用" for item in unit_items)
+                    top_group = fallback_groups.most_common(1)[0][0]
+                name = f"{top_group}{label_prefix}{idx}"
             rationale = f"覆盖 {len(entity_indices)} 个实体，核心{item_term}为 {top_names}。"
             decorated.append(
                 {
@@ -563,6 +687,7 @@ class SetMinerService:
         if dataset.scene == "erp" and any(unit.get("soft_conflict_names") for unit in units):
             warnings.append("当前推荐角色中仍存在 soft SoD 告警组合，请在结果页中进一步审核。")
         if dataset.scene == "sql":
+            warnings.extend(dataset.meta.get("import_warnings", []))
             warnings.extend(self._check_join_reachability(dataset, units))
             warnings.extend(self._check_granularity_conflicts(dataset, units))
         return warnings
