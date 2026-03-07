@@ -10,7 +10,6 @@ import {
   Radio,
   Row,
   Space,
-  Spin,
   Statistic,
   Tabs,
   Tag,
@@ -145,8 +144,18 @@ function App() {
         : await solveSqlFiles(sqlFiles)
       setResults(prev => ({ ...prev, [scene]: solved }))
       setAnalyzeStatus('done')
-    } catch {
-      setError('上传分析失败，请检查文件格式或后端接口。')
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { status?: number; data?: { detail?: string } }; message?: string }
+      const detail = axiosErr?.response?.data?.detail
+      const status = axiosErr?.response?.status
+      const msg = axiosErr?.message
+      if (detail) {
+        setError(`分析失败（${status ?? '?'}）：${detail}`)
+      } else if (status) {
+        setError(`分析失败，服务器返回 ${status}，请检查文件格式或后端接口。`)
+      } else {
+        setError(`分析失败：${msg ?? '未知错误'}，请检查文件格式或后端接口。`)
+      }
     } finally { setLoading(false) }
   }
 
@@ -157,8 +166,18 @@ function App() {
       const solved = await solveErpFile(selectedFile, currentRoleFile, currentUserRoleFile)
       setResults(prev => ({ ...prev, [scene]: solved }))
       setDiffAnalyzeStatus('done')
-    } catch {
-      setError('上传分析失败，请检查文件格式或后端接口。')
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { status?: number; data?: { detail?: string } }; message?: string }
+      const detail = axiosErr?.response?.data?.detail
+      const status = axiosErr?.response?.status
+      const msg = axiosErr?.message
+      if (detail) {
+        setError(`分析失败（${status ?? '?'}）：${detail}`)
+      } else if (status) {
+        setError(`分析失败，服务器返回 ${status}，请检查文件格式或后端接口。`)
+      } else {
+        setError(`分析失败：${msg ?? '未知错误'}，请检查文件格式或后端接口。`)
+      }
     } finally { setLoading(false) }
   }
 
@@ -201,6 +220,8 @@ function App() {
             size="middle"
             icon={<ReloadOutlined />}
             onClick={() => void handleRefreshDemo()}
+            loading={loading}
+            disabled={loading}
             block
             style={{ marginTop: 2 }}
           >
@@ -244,11 +265,12 @@ function App() {
             </div>
 
             {/* 主文件上传区 */}
-            <div className="upload-drop-zone">
+            <div className="upload-drop-zone" style={loading ? { opacity: 0.45, pointerEvents: 'none' } : {}}>
               <label className="upload-drop-label">
                 <input
                   type="file"
                   accept=".csv,.xlsx,.xls"
+                  disabled={loading}
                   style={{ display: 'none' }}
                   onChange={(e) => {
                     setSelectedFile(e.target.files?.[0] ?? null)
@@ -291,11 +313,12 @@ function App() {
                       <Text style={{ fontSize: 11, color: '#8c8c8c', display: 'block', marginBottom: 4 }}>
                         现状角色权限文件 <Text code style={{ fontSize: 10 }}>role_id / permission_id</Text>
                       </Text>
-                      <div className="upload-drop-zone upload-drop-zone--sm">
+                      <div className="upload-drop-zone upload-drop-zone--sm" style={loading ? { opacity: 0.45, pointerEvents: 'none' } : {}}>
                         <label className="upload-drop-label">
                           <input
                             type="file"
                             accept=".csv,.xlsx,.xls"
+                            disabled={loading}
                             style={{ display: 'none' }}
                             onChange={(e) => setCurrentRoleFile(e.target.files?.[0] ?? null)}
                           />
@@ -316,11 +339,12 @@ function App() {
                       <Text style={{ fontSize: 11, color: '#8c8c8c', display: 'block', marginBottom: 4 }}>
                         现状用户角色文件 <Text code style={{ fontSize: 10 }}>user_id / role_id</Text>
                       </Text>
-                      <div className="upload-drop-zone upload-drop-zone--sm">
+                      <div className="upload-drop-zone upload-drop-zone--sm" style={loading ? { opacity: 0.45, pointerEvents: 'none' } : {}}>
                         <label className="upload-drop-label">
                           <input
                             type="file"
                             accept=".csv,.xlsx,.xls"
+                            disabled={loading}
                             style={{ display: 'none' }}
                             onChange={(e) => setCurrentUserRoleFile(e.target.files?.[0] ?? null)}
                           />
@@ -343,7 +367,7 @@ function App() {
             />
 
             <Space direction="vertical" size={6} style={{ width: '100%' }}>
-              <Button block onClick={() => void handlePreviewUpload()} disabled={!selectedFile} icon={<InfoCircleOutlined />}>
+              <Button block onClick={() => void handlePreviewUpload()} disabled={!selectedFile || loading} loading={loading && analyzeStatus === 'idle'} icon={<InfoCircleOutlined />}>
                 预校验文件
               </Button>
               <Button
@@ -351,7 +375,8 @@ function App() {
                 type="primary"
                 icon={analyzeStatus === 'done' ? <CheckCircleOutlined /> : <UploadOutlined />}
                 onClick={() => void handleAnalyzeUpload()}
-                disabled={!selectedFile}
+                disabled={!selectedFile || loading}
+                loading={loading}
                 style={analyzeStatus === 'done' ? { background: '#52c41a', borderColor: '#52c41a' } : {}}
               >
                 {analyzeStatus === 'done' ? '分析完成（重新分析）' : '上传并分析'}
@@ -360,7 +385,8 @@ function App() {
                 block
                 type="dashed"
                 onClick={() => void handleAnalyzeWithDiff()}
-                disabled={!selectedFile || !currentRoleFile}
+                disabled={!selectedFile || !currentRoleFile || loading}
+                loading={loading}
                 icon={diffAnalyzeStatus === 'done' ? <CheckCircleOutlined /> : <ReloadOutlined />}
                 style={diffAnalyzeStatus === 'done' ? { color: '#52c41a', borderColor: '#52c41a' } : {}}
               >
@@ -399,12 +425,13 @@ function App() {
             <Text style={{ fontSize: 12, color: '#595959' }}>
               支持多个 <Text code style={{ fontSize: 11 }}>.sql</Text> / <Text code style={{ fontSize: 11 }}>.txt</Text> 文件，系统自动提取字段、来源表和 JOIN 线索。
             </Text>
-            <div className="upload-drop-zone">
+            <div className="upload-drop-zone" style={loading ? { opacity: 0.45, pointerEvents: 'none' } : {}}>
               <label className="upload-drop-label">
                 <input
                   type="file"
                   accept=".sql,.txt"
                   multiple
+                  disabled={loading}
                   style={{ display: 'none' }}
                   onChange={(e) => {
                     setSqlFiles(Array.from(e.target.files ?? []))
@@ -429,7 +456,7 @@ function App() {
               </label>
             </div>
             <Space direction="vertical" size={6} style={{ width: '100%' }}>
-              <Button block onClick={() => void handlePreviewUpload()} disabled={sqlFiles.length === 0} icon={<InfoCircleOutlined />}>
+              <Button block onClick={() => void handlePreviewUpload()} disabled={sqlFiles.length === 0 || loading} loading={loading && analyzeStatus === 'idle'} icon={<InfoCircleOutlined />}>
                 预校验 SQL
               </Button>
               <Button
@@ -437,7 +464,8 @@ function App() {
                 type="primary"
                 icon={analyzeStatus === 'done' ? <CheckCircleOutlined /> : <UploadOutlined />}
                 onClick={() => void handleAnalyzeUpload()}
-                disabled={sqlFiles.length === 0}
+                disabled={sqlFiles.length === 0 || loading}
+                loading={loading}
                 style={analyzeStatus === 'done' ? { background: '#52c41a', borderColor: '#52c41a' } : {}}
               >
                 {analyzeStatus === 'done' ? '分析完成（重新分析）' : '上传并分析 SQL'}
@@ -463,11 +491,6 @@ function App() {
       )}
 
       {error && <Alert type="error" showIcon message={error} style={{ fontSize: 12 }} />}
-      {loading && (
-        <div style={{ textAlign: 'center', padding: '16px 0' }}>
-          <Spin size="default" />
-        </div>
-      )}
     </Space>
   )
 

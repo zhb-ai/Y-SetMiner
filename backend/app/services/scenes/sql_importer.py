@@ -480,6 +480,9 @@ class SqlImportService:
             if isinstance(projection, exp.Star):
                 continue
             field = self._resolve_projection(projection, alias_map, cte_map)
+            # 过滤掉无效字段名（空字符串、纯符号如 "." "," 等）
+            if not field.field_name or not re.search(r"[A-Za-z0-9_\u4e00-\u9fff]", field.field_name):
+                continue
             dedupe_key = f"{field.primary_source or 'derived'}::{field.field_name}"
             if dedupe_key in seen:
                 continue
@@ -574,7 +577,15 @@ class SqlImportService:
             original_expr = ""  # 有别名时，别名即为可读名，不需要额外展示原始表达式
         elif isinstance(projection, exp.Column):
             # 普通列引用，直接用列名
-            field_name = projection.name or raw_expr
+            col_name = projection.name
+            # projection.name 在极少数情况下可能返回空（如解析出空列节点），此时用 raw_expr 兜底
+            # 但 raw_expr 可能是 "table.col" 这样的带限定符形式，取最后一段
+            if col_name:
+                field_name = col_name
+            elif raw_expr and "." in raw_expr:
+                field_name = raw_expr.split(".")[-1].strip()
+            else:
+                field_name = raw_expr.strip()
             original_expr = ""
         else:
             # CASE WHEN / 聚合函数 / 运算表达式 等无别名情况

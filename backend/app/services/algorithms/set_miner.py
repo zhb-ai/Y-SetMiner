@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import Counter, defaultdict, deque
+from collections import Counter, deque
 from dataclasses import dataclass
 from itertools import combinations
 
@@ -41,8 +41,7 @@ class SetMinerService:
         item_lookup = {item.id: item for item in dataset.items}
         constraint_context = self._build_erp_constraint_context(dataset, matrix) if dataset.scene == "erp" else None
 
-        pattern_groups = self._group_exact_patterns(matrix)
-        selected_units = self._select_units(dataset, matrix, pattern_groups, constraint_context=constraint_context)
+        selected_units = self._select_units(dataset, matrix, {}, constraint_context=constraint_context)
         assignments = self._build_assignments(bundle, matrix, selected_units)
 
         n_entities = len(bundle.entity_ids)
@@ -128,67 +127,171 @@ class SetMinerService:
 
         return response
 
-    def _group_exact_patterns(self, matrix: np.ndarray) -> dict[tuple[int, ...], list[int]]:
-        groups: dict[tuple[int, ...], list[int]] = {}
-        for row_index, row in enumerate(matrix):
-            key = tuple(np.where(row == 1)[0].tolist())
-            groups.setdefault(key, []).append(row_index)
-        return groups
+    def _compute_jaccard_association(self, matrix: np.ndarray) -> np.ndarray:
+        """计算字段/权限之间的 Jaccard 关联矩阵。"""
+        n, m = matrix.shape
+        assoc = np.zeros((m, m))
+        for j in range(m):
+            for l in range(j + 1, m):
+                col_j = matrix[:, j].astype(bool)
+                col_l = matrix[:, l].astype(bool)
+                intersection = int(np.sum(col_j & col_l))
+                union = int(np.sum(col_j | col_l))
+                sim = intersection / union if union > 0 else 0.0
+                assoc[j, l] = assoc[l, j] = sim
+        return assoc
+
+    def _generate_asso_candidates(self, assoc: np.ndarray, matrix: np.ndarray, tau: float) -> list[np.ndarray]:
+        """基于 Jaccard 关联矩阵生成候选基向量（字段组），并加入每个实体的完整字段集合。"""
+        m = assoc.shape[0]
+        seen: dict[tuple, np.ndarray] = {}
+
+        # 方法1：关联矩阵行二值化——找高度共现的字段组
+        for j in range(m):
+            candidate = (assoc[j] >= tau).astype(np.int8)
+            candidate[j] = 1
+            if int(candidate.sum()) >= 2:
+                key = tuple(candidate.tolist())
+                seen[key] = candidate
+
+        # 方法2：每个实体的完整字段集合也纳入候选
+        for row in matrix:
+            candidate = row.astype(np.int8)
+            if int(candidate.sum()) >= 1:
+                key = tuple(candidate.tolist())
+                seen[key] = candidate
+
+        return list(seen.values())
 
     def _select_units(
         self,
         dataset: SceneDataset,
         matrix: np.ndarray,
-        pattern_groups: dict[tuple[int, ...], list[int]],
+        pattern_groups: dict[tuple[int, ...], list[int]],  # 保留签名兼容性，此参数不再使用
         constraint_context: ErpConstraintContext | None = None,
     ) -> list[dict[str, object]]:
-        candidate_patterns = sorted(
-            [pattern for pattern in pattern_groups if pattern],
-            key=lambda pattern: (len(pattern_groups[pattern]) * len(pattern), len(pattern)),
-            reverse=True,
-        )
+        n, m = matrix.shape
+        max_items = dataset.constraints.max_items_per_unit
+
+        # 动态调整关联阈值：字段越少阈值越低，保证能形成有意义的候选组
+        tau = 0.3 if m <= 20 else (0.4 if m <= 50 else 0.5)
+        assoc = self._compute_jaccard_association(matrix)
+        candidates = self._generate_asso_candidates(assoc, matrix, tau)
 
         selected_units: list[dict[str, object]] = []
-        uncovered = matrix.copy()
+        residual = matrix.copy().astype(np.int8)
+        unit_index = 0
 
-        for index, pattern in enumerate(candidate_patterns, start=1):
-            item_indices = list(pattern)[: dataset.constraints.max_items_per_unit]
-            entity_indices = [
-                row_idx for row_idx, row in enumerate(matrix) if all(row[item_idx] == 1 for item_idx in item_indices)
-            ]
-            if not entity_indices:
-                continue
+        for _ in range(max(n, m) * 2):  # 上界保护，防止死循环
+            if residual.sum() == 0:
+                break
+
+            best_gain = 0
+            best_item_vec: np.ndarray | None = None
+            best_entity_indices: list[int] = []
+
+            for candidate in candidates:
+                # 截断至最大字段数：选取与候选中字段关联度最高的 top-max_items 项
+                item_positions = np.where(candidate == 1)[0]
+                if len(item_positions) > max_items:
+                    # 保留关联度最强的 max_items 个字段
+                    freq = matrix[:, item_positions].sum(axis=0)
+                    top_pos = item_positions[np.argsort(-freq)[:max_items]]
+                    truncated = np.zeros(m, dtype=np.int8)
+                    truncated[top_pos] = 1
+                else:
+                    truncated = candidate
+
+                item_positions_trunc = np.where(truncated == 1)[0]
+                if len(item_positions_trunc) == 0:
+                    continue
+
+                # 判断哪些实体与该候选有足够重叠（覆盖率 > 0.5 或完全包含）
+                sub_residual = residual[:, item_positions_trunc]  # shape (n, k)
+                sub_original = matrix[:, item_positions_trunc]
+                k = len(item_positions_trunc)
+
+                # 实体必须在原始矩阵中拥有该候选的大部分字段（至少 50%）
+                entity_has = (sub_original.sum(axis=1) / k) >= 0.5
+                entity_indices = np.where(entity_has)[0].tolist()
+                if not entity_indices:
+                    continue
+
+                gain = int(residual[np.ix_(entity_indices, item_positions_trunc.tolist())].sum())
+                if gain > best_gain:
+                    best_gain = gain
+                    best_item_vec = truncated
+                    best_entity_indices = entity_indices
+
+            if best_gain == 0 or best_item_vec is None:
+                break
+
+            unit_index += 1
+            item_indices = np.where(best_item_vec == 1)[0].tolist()
 
             constraint_meta = self._apply_erp_constraints(item_indices, constraint_context) if constraint_context else {}
-            item_indices = constraint_meta.get("item_indices", item_indices)
-            gain = int(uncovered[np.ix_(entity_indices, item_indices)].sum())
-            if gain == 0:
-                continue
+            final_item_indices = constraint_meta.get("item_indices", item_indices)
 
             selected_units.append(
                 {
-                    "id": f"unit-{index}",
-                    "item_indices": item_indices,
-                    "entity_indices": entity_indices,
-                    "score": round(max((gain / max(len(item_indices), 1)) - float(constraint_meta.get("soft_penalty", 0)), 0), 2),
+                    "id": f"unit-{unit_index}",
+                    "item_indices": final_item_indices,
+                    "entity_indices": best_entity_indices,
+                    "score": round(
+                        max(
+                            (best_gain / max(len(final_item_indices), 1))
+                            - float(constraint_meta.get("soft_penalty", 0)),
+                            0,
+                        ),
+                        2,
+                    ),
                     **constraint_meta,
                 }
             )
-            uncovered[np.ix_(entity_indices, item_indices)] = 0
+            residual[np.ix_(best_entity_indices, final_item_indices)] = 0
 
-        for row_index, row in enumerate(uncovered):
-            remaining_items = np.where(row == 1)[0].tolist()
-            if remaining_items:
-                constraint_meta = self._apply_erp_constraints(remaining_items[: dataset.constraints.max_items_per_unit], constraint_context) if constraint_context else {}
-                selected_units.append(
-                    {
-                        "id": f"unit-tail-{row_index + 1}",
-                        "item_indices": constraint_meta.get("item_indices", remaining_items[: dataset.constraints.max_items_per_unit]),
-                        "entity_indices": [row_index],
-                        "score": round(max(len(remaining_items) - float(constraint_meta.get("soft_penalty", 0)), 0), 2),
-                        **constraint_meta,
-                    }
-                )
+        # 尾部补齐：把剩余未覆盖的字段合并到已有的最相似宽表，实在无法合并才新建
+        for row_index in range(n):
+            remaining = np.where(residual[row_index] == 1)[0].tolist()
+            if not remaining:
+                continue
+
+            # 尝试把剩余字段并入已有宽表（找字段集合重叠最多的宽表）
+            best_unit_idx = -1
+            best_overlap = 0
+            for u_idx, unit in enumerate(selected_units):
+                overlap = len(set(unit["item_indices"]) & set(remaining))
+                if overlap > best_overlap:
+                    best_overlap = overlap
+                    best_unit_idx = u_idx
+
+            if best_unit_idx >= 0 and best_overlap > 0:
+                merged = sorted(set(selected_units[best_unit_idx]["item_indices"]) | set(remaining))
+                if len(merged) <= max_items:
+                    selected_units[best_unit_idx]["item_indices"] = merged
+                    if row_index not in selected_units[best_unit_idx]["entity_indices"]:
+                        selected_units[best_unit_idx]["entity_indices"].append(row_index)
+                    residual[row_index, remaining] = 0
+                    continue
+
+            # 无法合并时新建补充宽表
+            unit_index += 1
+            constraint_meta = (
+                self._apply_erp_constraints(remaining[:max_items], constraint_context)
+                if constraint_context
+                else {}
+            )
+            selected_units.append(
+                {
+                    "id": f"unit-tail-{unit_index}",
+                    "item_indices": constraint_meta.get("item_indices", remaining[:max_items]),
+                    "entity_indices": [row_index],
+                    "score": round(
+                        max(len(remaining) - float(constraint_meta.get("soft_penalty", 0)), 0), 2
+                    ),
+                    **constraint_meta,
+                }
+            )
 
         return self._decorate_units(dataset, matrix, selected_units)
 

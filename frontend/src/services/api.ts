@@ -4,7 +4,7 @@ import type { ImportPreviewResponse, SceneInfo, SceneKey, SolveResponse } from '
 
 const client = axios.create({
   baseURL: '/api',
-  timeout: 10000,
+  timeout: 120000,
 })
 
 export async function fetchScenes() {
