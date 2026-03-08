@@ -156,7 +156,7 @@ def build_extension_delta(
     dataset: SceneDataset,
     unit: dict[str, object],
     base_candidate: SqlBaseCandidate,
-) -> tuple[list[str], list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str], list[str]]:
     base_sources = set(base_candidate.source_subset)
     extra_source_tables = sorted(set(get_real_unit_sources(dataset, unit)) - base_sources)
     base_items = set(base_candidate.shared_item_indices)
@@ -173,7 +173,11 @@ def build_extension_delta(
         _build_item_source_label(dataset, item_idx)
         for item_idx in extra_item_indices
     ]
-    return extra_source_tables, extra_item_names, extra_item_sources
+    extra_item_source_details = [
+        _build_item_source_detail(dataset, item_idx)
+        for item_idx in extra_item_indices
+    ]
+    return extra_source_tables, extra_item_names, extra_item_sources, extra_item_source_details
 
 
 def _build_subset_item_frequency(
@@ -221,6 +225,34 @@ def _build_item_source_label(dataset: SceneDataset, item_idx: int) -> str:
     item = dataset.items[item_idx]
     source = str(item.source or "").strip()
     original_expr = str(item.meta.get("original_expr", "")).strip()
-    if source == "derived" and original_expr:
-        return original_expr
+    source_tables = _split_item_meta_list(item.meta.get("source_tables", ""))
+    if source == "derived":
+        if source_tables:
+            return f"表达式依赖({'+'.join(source_tables)})"
+        if original_expr:
+            return "表达式/常量"
     return source or "unknown"
+
+
+def _build_item_source_detail(dataset: SceneDataset, item_idx: int) -> str:
+    item = dataset.items[item_idx]
+    source = str(item.source or "").strip()
+    source_tables = _split_item_meta_list(item.meta.get("source_tables", ""))
+    source_columns = str(item.meta.get("column_name", "")).strip()
+    original_expr = str(item.meta.get("original_expr", "")).strip()
+
+    if source != "derived":
+        return original_expr
+
+    details: list[str] = []
+    if source_tables:
+        details.append(f"依赖表: {', '.join(source_tables)}")
+    if source_columns:
+        details.append(f"参与列: {source_columns}")
+    if original_expr:
+        details.append(f"原始表达式: {original_expr}")
+    return "\n".join(details)
+
+
+def _split_item_meta_list(value: object) -> list[str]:
+    return [part.strip() for part in str(value).split(",") if part.strip()]

@@ -23,6 +23,7 @@ from app.services.algorithms.sql_unit_hierarchy import (
     build_extension_delta,
     get_real_unit_source_counter,
     get_real_unit_sources,
+    _build_item_source_detail,
     mine_sql_base_candidates,
     _build_item_source_label,
 )
@@ -481,6 +482,7 @@ class SetMinerService:
                     "item_display_names": [items[item_idx].name for item_idx in item_indices],
                     "item_exprs": [items[item_idx].meta.get("original_expr", "") for item_idx in item_indices],
                     "item_sources": [_build_item_source_label(dataset, item_idx) for item_idx in item_indices],
+                    "item_source_details": [_build_item_source_detail(dataset, item_idx) for item_idx in item_indices],
                     "covered_entity_ids": [entities[e_idx].id for e_idx in entity_indices],
                     "covered_entity_names": [entities[e_idx].name for e_idx in entity_indices],
                     "score": unit["score"],
@@ -492,8 +494,10 @@ class SetMinerService:
                     "extra_source_tables": list(unit.get("extra_source_tables", [])),
                     "extra_item_names": list(unit.get("extra_item_names", [])),
                     "extra_item_sources": list(unit.get("extra_item_sources", [])),
+                    "extra_item_source_details": list(unit.get("extra_item_source_details", [])),
                     "suggested_item_names": list(unit.get("suggested_item_names", [])),
                     "suggested_item_sources": list(unit.get("suggested_item_sources", [])),
+                    "suggested_item_source_details": list(unit.get("suggested_item_source_details", [])),
                     "suggested_item_hits": list(unit.get("suggested_item_hits", [])),
                     "support_unit_count": unit.get("support_unit_count"),
                     "base_field_min_hits": unit.get("base_field_min_hits"),
@@ -523,6 +527,7 @@ class SetMinerService:
             item_display_names=unit["item_display_names"],
             item_exprs=unit["item_exprs"],
             item_sources=unit.get("item_sources", []),
+            item_source_details=unit.get("item_source_details", []),
             covered_entity_ids=unit["covered_entity_ids"],
             covered_entity_names=unit["covered_entity_names"],
             rationale=unit["rationale"],
@@ -533,8 +538,10 @@ class SetMinerService:
             extra_source_tables=list(unit.get("extra_source_tables", [])),
             extra_item_names=list(unit.get("extra_item_names", [])),
             extra_item_sources=list(unit.get("extra_item_sources", [])),
+            extra_item_source_details=list(unit.get("extra_item_source_details", [])),
             suggested_item_names=list(unit.get("suggested_item_names", [])),
             suggested_item_sources=list(unit.get("suggested_item_sources", [])),
+            suggested_item_source_details=list(unit.get("suggested_item_source_details", [])),
             suggested_item_hits=list(unit.get("suggested_item_hits", [])),
             support_unit_count=unit.get("support_unit_count"),
             base_field_min_hits=unit.get("base_field_min_hits"),
@@ -695,7 +702,9 @@ class SetMinerService:
                 raw_unit = raw_by_id[member_id]
                 if self._get_unit_source_signature(dataset, raw_unit) != candidate.source_subset:
                     continue
-                extra_sources, extra_items, extra_item_sources = build_extension_delta(dataset, raw_unit, candidate)
+                extra_sources, extra_items, extra_item_sources, extra_item_source_details = build_extension_delta(
+                    dataset, raw_unit, candidate
+                )
                 if extra_sources or extra_items:
                     continue
 
@@ -707,8 +716,12 @@ class SetMinerService:
                     "extra_source_tables": [],
                     "extra_item_names": [],
                     "extra_item_sources": [],
+                    "extra_item_source_details": [],
                     "suggested_item_names": [dataset.items[item_idx].name for item_idx in candidate.suggested_item_indices],
                     "suggested_item_sources": [_build_item_source_label(dataset, item_idx) for item_idx in candidate.suggested_item_indices],
+                    "suggested_item_source_details": [
+                        _build_item_source_detail(dataset, item_idx) for item_idx in candidate.suggested_item_indices
+                    ],
                     "suggested_item_hits": list(candidate.suggested_item_hits),
                     "support_unit_count": candidate.support_unit_count,
                     "base_field_min_hits": candidate.base_field_min_hits,
@@ -743,8 +756,12 @@ class SetMinerService:
                     "extra_source_tables": [],
                     "extra_item_names": [],
                     "extra_item_sources": [],
+                    "extra_item_source_details": [],
                     "suggested_item_names": [dataset.items[item_idx].name for item_idx in candidate.suggested_item_indices],
                     "suggested_item_sources": [_build_item_source_label(dataset, item_idx) for item_idx in candidate.suggested_item_indices],
+                    "suggested_item_source_details": [
+                        _build_item_source_detail(dataset, item_idx) for item_idx in candidate.suggested_item_indices
+                    ],
                     "suggested_item_hits": list(candidate.suggested_item_hits),
                     "support_unit_count": candidate.support_unit_count,
                     "base_field_min_hits": candidate.base_field_min_hits,
@@ -758,7 +775,9 @@ class SetMinerService:
                 if member_id == base_unit_id:
                     continue
                 raw_unit = raw_by_id[member_id]
-                extra_sources, extra_items, extra_item_sources = build_extension_delta(dataset, raw_unit, candidate)
+                extra_sources, extra_items, extra_item_sources, extra_item_source_details = build_extension_delta(
+                    dataset, raw_unit, candidate
+                )
                 updated = {
                     **decorated_by_id[member_id],
                     "base_name": base_name,
@@ -767,8 +786,10 @@ class SetMinerService:
                     "extra_source_tables": extra_sources,
                     "extra_item_names": extra_items,
                     "extra_item_sources": extra_item_sources,
+                    "extra_item_source_details": extra_item_source_details,
                     "suggested_item_names": [],
                     "suggested_item_sources": [],
+                    "suggested_item_source_details": [],
                     "suggested_item_hits": [],
                     "support_unit_count": None,
                     "base_field_min_hits": None,
@@ -806,8 +827,10 @@ class SetMinerService:
                 "extra_source_tables": [],
                 "extra_item_names": [],
                 "extra_item_sources": [],
+                "extra_item_source_details": [],
                 "suggested_item_names": [],
                 "suggested_item_sources": [],
+                "suggested_item_source_details": [],
                 "suggested_item_hits": [],
                 "support_unit_count": None,
                 "base_field_min_hits": None,

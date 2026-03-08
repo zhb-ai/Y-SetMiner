@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from app.schemas.solve import ConstraintConfig, Entity, Item, Relation, SceneDataset
+from app.services.algorithms.sql_unit_hierarchy import _build_item_source_detail, _build_item_source_label
 from app.services.algorithms.set_miner import SetMinerService
 from app.services.scenes.sql_importer import ParsedSqlDocument, SqlImportService
 
@@ -116,6 +117,64 @@ class SqlImportServiceTests(unittest.TestCase):
         warnings = self.service._build_document_import_warnings(document)
 
         self.assertTrue(any("derived" in warning for warning in warnings))
+
+    def test_document_import_warnings_distinguish_expression_lineage_and_constant(self) -> None:
+        document = ParsedSqlDocument(
+            name="demo.sql",
+            content="select round(t1.a + t2.b, 2) as c, 1 as d",
+            tables=["t1", "t2"],
+            columns=[
+                {
+                    "name": "c",
+                    "source_table": "derived",
+                    "column_name": "t1.a, t2.b",
+                    "source_tables": "t1, t2",
+                    "original_expr": "ROUND(t1.a + t2.b, 2)",
+                },
+                {
+                    "name": "d",
+                    "source_table": "derived",
+                    "column_name": "d",
+                    "source_tables": "",
+                    "original_expr": "1",
+                },
+            ],
+            joins=[],
+            parser="sqlglot_ast",
+        )
+
+        warnings = self.service._build_document_import_warnings(document)
+
+        self.assertTrue(any("已提取依赖来源的表达式字段" in warning for warning in warnings))
+        self.assertTrue(any("常量/无法归属的派生字段" in warning for warning in warnings))
+
+    def test_build_item_source_detail_exposes_expression_dependencies(self) -> None:
+        dataset = SceneDataset(
+            scene="sql",
+            entities=[Entity(id="sql_1", name="demo.sql")],
+            items=[
+                Item(
+                    id="derived::库存金额",
+                    name="库存金额",
+                    group="derived",
+                    source="derived",
+                    item_type="column",
+                    meta={
+                        "source_tables": "gl, oh",
+                        "column_name": "gl.nabprice, gl.noutmny, gl.noutnum, oh.nonhandnum",
+                        "original_expr": "ROUND(oh.nonhandnum * COALESCE(gl.nabprice, gl.noutmny / gl.noutnum), 2)",
+                    },
+                )
+            ],
+            relations=[Relation(entity_id="sql_1", item_id="derived::库存金额")],
+            constraints=ConstraintConfig(),
+        )
+
+        self.assertEqual(_build_item_source_label(dataset, 0), "表达式依赖(gl+oh)")
+        detail = _build_item_source_detail(dataset, 0)
+        self.assertIn("依赖表: gl, oh", detail)
+        self.assertIn("参与列: gl.nabprice, gl.noutmny, gl.noutnum, oh.nonhandnum", detail)
+        self.assertIn("原始表达式:", detail)
 
     def test_fullwidth_parenthesis_sql_no_longer_produces_weird_sources(self) -> None:
         document = self._parse_case("兼容新备货-分仓.sql")

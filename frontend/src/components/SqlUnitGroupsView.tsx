@@ -34,14 +34,20 @@ function groupFieldsBySource(names: string[], sources: string[]) {
   return Array.from(grouped.entries())
 }
 
+function isExpressionSource(source: string) {
+  return source.startsWith('表达式依赖') || source === '表达式/常量'
+}
+
 function SourceGroupedFields({
   names,
   sources,
+  sourceDetails,
   hits,
   supportCount,
 }: {
   names: string[]
   sources: string[]
+  sourceDetails?: string[]
   hits?: number[]
   supportCount?: number | null
 }) {
@@ -52,35 +58,67 @@ function SourceGroupedFields({
 
   return (
     <Space direction="vertical" size={8} style={{ width: '100%' }}>
-      {groups.map(([source, fieldNames]) => (
-        <div
-          key={`${source}-${fieldNames.join('|')}`}
-          style={{
-            display: 'flex',
-            alignItems: 'flex-start',
-            gap: 8,
-            flexWrap: 'wrap',
-            padding: '6px 8px',
-            background: '#fafafa',
-            border: '1px solid #f0f0f0',
-            borderRadius: 8,
-          }}
-        >
-          <Tag color="geekblue" style={{ margin: 0, fontSize: 12 }}>
-            {source}
-          </Tag>
-          <div style={{ flex: 1, minWidth: 220 }}>
-            <TagsCell
-              items={fieldNames.map((name) => {
-                const nameIndex = names.findIndex((item, idx) => item === name && sources[idx] === source)
-                const hit = hits?.[nameIndex]
-                const label = hit && supportCount ? `${name}(${hit}/${supportCount})` : name
-                return { name: label, expr: '' }
-              })}
-            />
+      {groups.map(([source, fieldNames]) => {
+        const isExpr = isExpressionSource(source)
+
+        const fieldItems = fieldNames.map((name) => {
+          const nameIndex = names.findIndex((item, idx) => item === name && sources[idx] === source)
+          const hit = hits?.[nameIndex]
+          const label = hit && supportCount ? `${name}(${hit}/${supportCount})` : name
+          const detail = sourceDetails?.[nameIndex] ?? ''
+          return { name: label, expr: detail, rawDetail: detail }
+        })
+
+        const depLines = isExpr
+          ? fieldItems
+              .flatMap((item) => item.rawDetail.split('\n'))
+              .filter((line) => line.startsWith('依赖表:') || line.startsWith('参与列:'))
+              .filter((line, idx, arr) => arr.indexOf(line) === idx)
+          : []
+
+        return (
+          <div
+            key={`${source}-${fieldNames.join('|')}`}
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: 8,
+              flexWrap: 'wrap',
+              padding: '6px 8px',
+              background: isExpr ? '#faf5ff' : '#fafafa',
+              border: `1px solid ${isExpr ? '#d3adf7' : '#f0f0f0'}`,
+              borderRadius: 8,
+            }}
+          >
+            <Tag
+              color={isExpr ? 'purple' : 'geekblue'}
+              style={{ margin: 0, fontSize: 12 }}
+            >
+              {source}
+            </Tag>
+            <div style={{ flex: 1, minWidth: 220 }}>
+              <TagsCell items={fieldItems} />
+              {depLines.length > 0 && (
+                <div style={{
+                  marginTop: 4,
+                  padding: '3px 6px',
+                  background: '#f9f0ff',
+                  borderRadius: 4,
+                  fontSize: 11,
+                  lineHeight: 1.6,
+                  color: '#595959',
+                  fontFamily: 'monospace',
+                  wordBreak: 'break-all',
+                }}>
+                  {depLines.map((line) => (
+                    <div key={line}>{line}</div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-      ))}
+        )
+      })}
     </Space>
   )
 }
@@ -129,13 +167,31 @@ function buildExtensionColumns(): TableColumnsType<SolutionUnit> {
       ),
     },
     {
-      title: '新增字段',
-      key: 'extra_items',
+      title: '全部字段',
+      key: 'all_items',
       width: 420,
       render: (_: unknown, record: SolutionUnit) => (
+        <SourceGroupedFields
+          names={record.item_display_names}
+          sources={record.item_sources}
+          sourceDetails={record.item_source_details}
+        />
+      ),
+    },
+    {
+      title: '新增字段',
+      key: 'extra_items',
+      width: 320,
+      render: (_: unknown, record: SolutionUnit) => (
         record.extra_item_names.length
-          ? <SourceGroupedFields names={record.extra_item_names} sources={record.extra_item_sources} />
-          : <Text type="secondary">无</Text>
+          ? (
+            <SourceGroupedFields
+              names={record.extra_item_names}
+              sources={record.extra_item_sources}
+              sourceDetails={record.extra_item_source_details}
+            />
+          )
+          : <Text type="secondary">与基础宽表一致</Text>
       ),
     },
     {
@@ -181,7 +237,11 @@ function BaseUnitSummary({ unit, extensionCount }: { unit: SolutionUnit; extensi
           : <Text type="secondary">无</Text>}
       </Descriptions.Item>
       <Descriptions.Item label="基础字段">
-        <SourceGroupedFields names={unit.item_display_names} sources={unit.item_sources} />
+        <SourceGroupedFields
+          names={unit.item_display_names}
+          sources={unit.item_sources}
+          sourceDetails={unit.item_source_details}
+        />
       </Descriptions.Item>
       <Descriptions.Item
         label={(
@@ -200,6 +260,7 @@ function BaseUnitSummary({ unit, extensionCount }: { unit: SolutionUnit; extensi
             <SourceGroupedFields
               names={unit.suggested_item_names}
               sources={unit.suggested_item_sources}
+              sourceDetails={unit.suggested_item_source_details}
               hits={unit.suggested_item_hits}
               supportCount={unit.support_unit_count}
             />

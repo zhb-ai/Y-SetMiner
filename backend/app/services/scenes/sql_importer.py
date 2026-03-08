@@ -948,6 +948,12 @@ class SqlImportService:
         warnings: list[str] = []
         unresolved_count = sum(1 for column in document.columns if not column.get("source_table"))
         derived_count = sum(1 for column in document.columns if column.get("source_table") == "derived")
+        derived_with_lineage_count = sum(
+            1
+            for column in document.columns
+            if column.get("source_table") == "derived" and str(column.get("source_tables", "")).strip()
+        )
+        pure_constant_count = max(derived_count - derived_with_lineage_count, 0)
 
         if document.parser == "regex_fallback":
             warnings.append(f"[警告] `{document.name}` 使用了正则回退解析，建议人工复核字段来源。")
@@ -956,9 +962,13 @@ class SqlImportService:
                 f"[警告] `{document.name}` 仍有 {unresolved_count} 个字段来源未确定，分析结果可能存在偏差。"
             )
         if derived_count:
-            warnings.append(
-                f"[警告] `{document.name}` 含 {derived_count} 个表达式/常量字段，来源已标记为 `derived`。"
-            )
+            segments: list[str] = []
+            if derived_with_lineage_count:
+                segments.append(f"{derived_with_lineage_count} 个已提取依赖来源的表达式字段")
+            if pure_constant_count:
+                segments.append(f"{pure_constant_count} 个常量/无法归属的派生字段")
+            detail = "，其中" + "，".join(segments) if segments else ""
+            warnings.append(f"[警告] `{document.name}` 含 {derived_count} 个 `derived` 字段{detail}。")
 
         return warnings
 

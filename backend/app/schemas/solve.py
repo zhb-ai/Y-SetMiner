@@ -86,6 +86,7 @@ class SolutionUnit(BaseModel):
     item_display_names: list[str] = Field(default_factory=list)
     item_exprs: list[str] = Field(default_factory=list)  # 对应 item_names 的原始表达式，无则为空字符串
     item_sources: list[str] = Field(default_factory=list)
+    item_source_details: list[str] = Field(default_factory=list)
     covered_entity_ids: list[str]
     covered_entity_names: list[str]
     rationale: str
@@ -96,8 +97,10 @@ class SolutionUnit(BaseModel):
     extra_source_tables: list[str] = Field(default_factory=list)
     extra_item_names: list[str] = Field(default_factory=list)
     extra_item_sources: list[str] = Field(default_factory=list)
+    extra_item_source_details: list[str] = Field(default_factory=list)
     suggested_item_names: list[str] = Field(default_factory=list)
     suggested_item_sources: list[str] = Field(default_factory=list)
+    suggested_item_source_details: list[str] = Field(default_factory=list)
     suggested_item_hits: list[int] = Field(default_factory=list)
     support_unit_count: int | None = None
     base_field_min_hits: int | None = None

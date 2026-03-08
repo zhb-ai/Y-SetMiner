@@ -34,6 +34,7 @@ export interface SolutionUnit {
   item_display_names: string[]
   item_exprs: string[]
   item_sources: string[]
+  item_source_details: string[]
   covered_entity_ids: string[]
   covered_entity_names: string[]
   rationale: string
@@ -44,8 +45,10 @@ export interface SolutionUnit {
   extra_source_tables: string[]
   extra_item_names: string[]
   extra_item_sources: string[]
+  extra_item_source_details: string[]
   suggested_item_names: string[]
   suggested_item_sources: string[]
+  suggested_item_source_details: string[]
   suggested_item_hits: number[]
   support_unit_count?: number | null
   base_field_min_hits?: number | null
