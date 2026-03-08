@@ -1,0 +1,41 @@
+select cu.deptname as 市场部,
+       cu.n_deptname as 部门,
+       (CASE WHEN cu.psnname is null then us.psnname else cu.psnname end) as 业务员,
+       cu.custcode as 客户编码,
+       cu.custname as 客户名称,
+       lx.businame as 业务类型,
+       ii.dbilldate as 日期,
+       ii.vnote as 备注，
+       ib.nnumber as 数量,
+       ib.nsummny as 价税合计,
+       ib.noriginalcurmny as 流水,
+       ib.invcode as 存货编码,
+       ib.invname as 存货名称,
+       ib.length as 品类,
+       ib.width as 大类,
+       ib.height as 小类,
+       ib.invpinpai as 品牌,
+       ck.storname as 库房
+  from nc5x.so_saleinvoice ii
+  left join (select ib.csaleid,ib.nnumber,ch.invpinpai,ch.height,ch.width,ch.length,ch.invname,ch.invcode,ib.nsummny,ib.noriginalcurmny
+          from nc5x.so_saleinvoice_b ib
+          left join nc5x.bd_invbasdoc ch
+            on ib.cinvbasdocid = ch.pk_invbasdoc ) ib
+    on ib.csaleid = ii.csaleid and ii.dr = 0
+  left join nc5x.bd_busitype lx
+    on ii.cbiztype = lx.pk_busitype
+  left join nc5x.v_zlw_cust cu
+    on ii.creceiptcorpid = cu.pk_cumandoc
+  left join nc5x.bd_psndoc us
+    on us.pk_psndoc= ii.cemployeeid 
+  left join nc5x.bd_stordoc ck
+    on ii.cwarehouseid = ck.pk_stordoc
+ where ii.dbilldate >= to_char(sysdate,'yyyy-mm-dd')
+   and ii.dbilldate <= to_char(sysdate,'yyyy-mm-dd')
+   and length(ib.invcode) <> 4
+   and ib.noriginalcurmny is not null
+   -- and ib.width = '兼容'
+   -- and lx.businame = '放货销售'
+   ----and ck.storname not like '%残品%'
+
+--出货数据源

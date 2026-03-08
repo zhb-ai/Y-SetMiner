@@ -1,0 +1,27 @@
+select 
+rc.storname,
+cc.storname,
+ch.invname,
+ch.width,
+db.nnum,
+zb.dbilldate,
+zb.user_name,
+db.vcode
+ from nc5x.to_bill_b db
+join nc5x.Bd_Stordoc rc
+  on db.cinwhid= rc.pk_stordoc
+join nc5x.Bd_Stordoc cc
+  on db.coutwhid= cc.pk_stordoc
+join nc5x.bd_invbasdoc ch
+  on db.cinvbasid= ch.pk_invbasdoc
+join (select  zb.coperatorid,zb.cbillid,us.user_name,us.cuserid,zb.dbilldate
+       from nc5x.to_bill zb
+       join nc5x.sm_user us
+         on zb.coperatorid = us.cuserid and zb.dr=0)zb
+  on zb.cbillid = db.cbillid 
+  and db.dr=0
+where zb.dbilldate >= '2018-01-01'
+and zb.dbilldate<= '2018-06-20'
+and cc.storname='1ºÅ¿â'
+and db.vcode like '%A%'
+and zb.user_name = '1ºÅ¿âNC×¨Ô±'

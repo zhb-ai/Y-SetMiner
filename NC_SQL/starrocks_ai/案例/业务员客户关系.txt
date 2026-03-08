@@ -1,0 +1,76 @@
+select b.custcode,
+       b.custname,
+       b.pk_cubasdoc,
+       m.pk_cumandoc,m.pk_resppsn1,
+       m.sealflag, --是否封存
+       sk.userid, --用户PK,
+       sk.pk_psndoc, --业务员pk,
+       sk.PSNCODE,
+       sk.PSNNAME
+  from  bd_cubasdoc b
+  left  join bd_cumandoc m
+    on b.pk_cubasdoc = m.pk_cubasdoc
+   and m.pk_corp = '1006'
+   and m.custflag in ('0', '2')
+   and m.dr = 0
+   and b.dr = 0
+   and m.sealflag is null
+  left join
+  (select sk.*,p.PSNCODE PSNCODE,p.PSNNAME PSNNAME,p.pk_psndoc pkpsndoc from
+  sm_userandclerk sk join bd_psndoc p on sk.pk_psndoc = p.pk_psnbasdoc
+  and p.pk_corp = '1006' and p.dr = 0 ) sk
+    on m.pk_resppsn1 = sk.pkpsndoc
+   and sk.dr = 0;
+
+
+--根据姓名查询 业务员主键
+   select p.PSNCODE PSNCODE,p.PSNNAME PSNNAME,p.pk_psndoc pkpsndoc from  bd_psndoc p where p.PSNNAME like '%王%'
+
+--- 根据客户编码查询 客商档案主键
+select  m.pk_cumandoc,m.pk_resppsn1,m.pk_resppsn1, m.sealflag --是否封存
+       from  bd_cumandoc m  where m.PK_CUBASDOC=( select b.PK_CUBASDOC from bd_cubasdoc b where b.CUSTCODE='18604599222')
+       and m.PK_CORP='1006' and m.dr=0
+   and m.custflag in ('0', '2');
+
+
+
+--要修改的目标
+select PK_DEPTDOC,PK_PSNDOC from BD_PSNDOC where PSNNAME='殷宁娜' and DR=0 and PK_CORP='1006' and SEALDATE is null;
+--要修改的主键条件
+select PK_CUBASDOC from BD_CUBASDOC  where DR=0  and CUSTCODE='18604599222';
+--修改
+select PK_RESPDEPT1,PK_RESPPSN1 from BD_CUMANDOC cum where PK_CORP='1006' and  DR=0 and SEALFLAG is null and CUSTFLAG in ('0','2') and PK_CUBASDOC ='1006C110000000ORI3RE';
+
+
+
+select
+    cum.PK_RESPDEPT1,cum.PK_RESPPSN1
+from BD_CUBASDOC cub
+left join BD_CUMANDOC cum on cub.PK_CUBASDOC=cum.PK_CUBASDOC
+    and cum.PK_CORP='1006'
+    and cum.DR=0
+    and cub.DR=0
+    and cum.SEALFLAG is null --封存
+    and cub.SEALFLAG is null
+    and cum.CUSTFLAG in ('0','2') --客户（排除了供应商）
+where cub.CUSTCODE='18604599222';
+
+
+select
+    cub.CUSTNAME,cub.CUSTCODE,cub.SEALFLAG,cum.PK_RESPDEPT1,cum.PK_RESPPSN1,psn.PSNCODE,psn.PSNNAME,psn.PK_DEPTDOC,PK_PSNDOC
+from BD_CUBASDOC cub
+left join BD_CUMANDOC cum on cub.PK_CUBASDOC=cum.PK_CUBASDOC
+    and cum.PK_CORP='1006'
+    and cum.DR=0
+    and cub.DR=0
+    and cum.SEALFLAG is null --封存
+    and cub.SEALFLAG is null
+    and cum.CUSTFLAG in ('0','2') --客户（排除了供应商）
+left join BD_PSNDOC psn on cum.PK_RESPPSN1=psn.PK_PSNDOC
+    and psn.DR=0
+    and psn.PK_CORP='1006'
+where cub.CUSTCODE='18604599222';
+
+
+
+

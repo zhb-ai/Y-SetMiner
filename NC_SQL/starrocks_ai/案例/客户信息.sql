@@ -1,0 +1,110 @@
+SELECT cum.deptcode as 部门编码,
+ cum.ts  as 修改时间,
+cum.deptname as 市场部,cum.n_deptname as 部门,cum.psnname as 业务员,dq.sf as 省份,dq.cs as 城市,cub.mobilephone3 as 服务行业,cub.bp3 as 客户类型,
+(case when (cum.sealflag is not null or length(ltrim(rtrim(cum.sealflag))) > 0 ) then 'Y' ELSE 'N' END ) as 是否封存,
+(case when cub.def3 = '0001C11000000012TJ3X' then '商桥' else '' end) as 商桥,
+cum.custflag ,
+cub.custcode as 客户编码,cub.custname as 客户名称,cub.def10 as 开票名称,
+pk_cubasdoc1 对应主账户,
+redit.nlimitmny as 额度,
+(case when cum.termid = '01' then 0 else to_number(cum.termid) end ) as 账期,
+substr(cub.createtime,0,10) as 建档日期,
+redits.nlimitmny as 放货额度,
+cum.innerctldays as 放货账期,
+cub.pk_cubasdoc as 客户主键,cum.pk_cumandoc,cub.linkman1 as 联系人,case when cub.phone1 ='/' or cub.phone1 ='\'then '0' else cub.phone1 end  as 电话,
+case when cub.mobilephone1 ='/' or cub.mobilephone1 ='\'then '0' else cub.mobilephone1 end  as 手机,
+case when cub.bp1='/' or  cub.bp1='\' then '0' else cub.bp1 end  as QQ微信
+--,dcu.addrname  地址
+FROM nc5x.bd_cubasdoc cub
+left join  (
+select  deptcode,
+(case
+when substr(dept.deptcode, 1, 6) in ( '030400','030441')  then
+'区域销售部'
+when substr(dept.deptcode, 1, 4) = '0303' then
+'北京市场部'
+when substr(dept.deptcode, 1, 4) = '0304' then
+'外阜市场部'
+when dept.deptname = 'B2B业务部' then
+'B2B业务部'
+when substr(dept.deptcode, 1, 2) = '10' then
+'直营+微分销'
+else dept.deptname end) deptname,
+dept.deptname n_deptname,
+psn.psnname psnname,
+pay.termname,
+pay.termid,
+cum.*
+
+from nc5x.bd_cumandoc cum
+join nc5x.bd_deptdoc dept
+on cum.pk_respdept1 = dept.pk_deptdoc
+join nc5x.bd_psndoc psn
+on cum.pk_resppsn1 = psn.pk_psndoc
+left join nc5x.bd_payterm pay
+on cum.pk_payterm = pay.pk_payterm
+and cum.dr = 0
+where cum.custflag in ('0', '2')
+and cum.pk_corp = '1006'
+and cum.dr = 0) cum
+on cub.pk_cubasdoc = cum.pk_cubasdoc and cub.dr = 0
+
+left join ( select cl.pk_areacl,c.areaclname sf,cl.areaclname cs 
+from nc5x.bd_areacl c 
+left join nc5x.bd_areacl cl 
+on c.pk_areacl = cl.pk_fatherarea ) dq 
+on cub.pk_areacl = dq.pk_areacl
+left join nc5x.so_cucredit redit
+on cub.pk_cubasdoc = redit.pk_cubasdoc
+and redit.climittypeid = '0001A110000000002EXU'
+and redit.vcredittypename = '2'
+and redit.dr =0
+left join nc5x.so_cucredit redits
+on cub.pk_cubasdoc = redits.pk_cubasdoc
+and redits.climittypeid = '0001A110000000002EXV'
+and redits.vcredittypename = '2'
+and redits.dr = 0
+--left join  nc5x.bd_custaddr dcu
+--on dcu.pk_cubasdoc =  cub.pk_cubasdoc
+where (1=1) 
+-- and cub.custcode = '13084549648'
+-- and dcu.addrname  like '%北京市%海淀区%连桥%'
+--and  cum.pk_cumandoc in ('1006A1100000000RI26L')
+ and (case when (cum.sealflag is not null or length(ltrim(rtrim(cum.sealflag))) > 0 ) then 'Y' ELSE 'N' END ) = 'N'
+-- and cum.psnname like '%共享客户%'
+--  and (case when cub.def3 = '0001C11000000012TJ3X' then '商桥' else '' end)  = '商桥'
+-- and cub.custcode like '39%'
+-- and (cub.custname like '%一修哥%' or cub.custname like '%北京恒基永业%'or cub.custname like '%北京国睿时代%')
+-- and cub.custcode  ='0011095935'
+-- and cub.custcode in ('1101b188','13001227192','1101b191','13041282466')
+-- and cum.n_deptname like   '%南京%'
+-- and cub.custcode in ('013488759199','FP-18611251550','13910204929')
+-- and cub.mobilephone1 like '%13603386546%'
+-- and cum.psnname like  '%刘卡%'
+-- and dq.sf like '%新疆%'
+--  and cum.psnname in ('王海侠')
+-- and substr(cub.createtime,0,10) >= '2024-09-05'
+-- and cub.custname like '%西安金顺捷电子科技有限公司%' 
+-- AND cum.psnname  =  '共享客户'
+-- and cum.n_deptname LIKE '%POP%'
+-- and cum.psnname  like  '%李林涛%'
+-- and regexp_like(cub.custname ,'(388|278|912|925|337|328|2612|303|FX-9|7516|912|925|214|7570)')
+-- and cub.pk_cubasdoc = '1006C110000000H6HDAM'
+-- and cum.psnname = '王泽凤
+-- and cum.psnname in ('刘喜丹','殷宁娜')
+-- and cub.mobilephone1 like '%18505305869%'
+-- and cum.n_deptname like '%沈阳%'
+--  and cub.custcode  like '%13899581603%'
+-- and cub.pk_cubasdoc  ='1006C110000000CM8MSF'
+and cum.deptname <>   '直营+微分销'
+-- and cub.custname like '%慧采%'
+-- and cub.pk_cubasdoc = '1006C110000000BU12L9'
+-- and cub.custcode = '13922745960'
+-- and cum.psnname  like '%李林涛%'
+-- and cum.n_deptname like '%南京%'
+-- and cum.psnname = '王海侠'
+-- and cum.deptname in  ('北京市场部','外阜市场部') 
+-- and cub.custname like '%北京上善合创科技有限公司%'
+-- and cum.psnname not in ('李东伟','刘喜丹','殷宁娜','闫广军') 
+-- and cum.deptname =  '平台业务部' 
+-- and cub.pk_cubasdoc = '1006C1100000006OEOAN'

@@ -1,0 +1,60 @@
+select custcode,
+       custname,
+       hbbm,
+       ddh,
+       billdate,
+       djdl,
+       czq,
+       sum(jfbbje) jfbbje,
+       sum(bbye) bbye,
+       sum(yushou) yushou,
+       sum(yfye) yfye
+  from (select bas.custcode,
+               bas.custname,
+               fb.hbbm,
+               ddh,
+               fb.billdate,
+               djdl,
+               fb.zy,
+               (case
+                 when fb.cinventoryid = '0001C1100000000ZOVE0' then
+                  fb.bbye
+                 else
+                  0
+               end) yfye,
+               (case
+                 when fb.djdl = 'ys' then
+                  fb.jfbbje
+                 else
+                  0
+               end) jfbbje,
+               (case
+                 when fb.djdl = 'ys' then
+                  fb.bbye
+                 else
+                  0
+               end) bbye,
+               (case
+                 when fb.djdl = 'sk' then
+                  fb.bbye
+                 else
+                  0
+               end) yushou,
+               - (to_date(to_char(sysdate, 'yyyy-mm-dd'), 'yyyy-mm-dd') -
+                 to_date(fb.billdate, 'yyyy-mm-dd') - to_Number(ter.termid)) czq --单据超账期天数
+          from nc5x.arap_djfb fb
+          left join nc5x.bd_payterm ter on fb.sfkxyh = ter.pk_payterm
+          left join nc5x.bd_cubasdoc bas on fb.hbbm = bas.pk_cubasdoc
+         where fb.djdl in ('ys', 'sk')
+           and fb.hbbm in
+               (select man.pk_cubasdoc
+                  from bd_cumandoc man
+                 where man.pk_resppsn1 = '1006A1100000000561HE')
+           and nvl(fb.bbye, 0) <> 0
+           and fb.dr = 0
+           and fb.isverifyfinished = 'N'
+           and fb.billdate >=
+               (select to_char(add_months(trunc(sysdate), -1), 'yyyy-mm-dd')
+                  from dual)) rf
+ group by custcode, custname, hbbm, ddh, billdate, djdl, czq
+ order by hbbm, czq

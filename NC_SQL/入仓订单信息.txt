@@ -1,0 +1,10 @@
+select user_name,s.dbilldate, s.vreceiptcode,s.vnote,s.pk_defdoc6,s.pk_defdoc17,s.vdef20,invcode,invname,sb.frownote,sb.nnumber,sb.noriginalcurtaxnetprice,sb.nsummny from so_sale s 
+join so_saleorder_b sb on s.csaleid = sb.csaleid 
+join bd_invbasdoc i on sb.cinvbasdocid = pk_invbasdoc 
+join sm_user u on s.coperatorid = u.cuserid
+where  ( s.fstatus =2 or s.fstatus =6)
+ and  s.ccustomerid = #param3#
+ and   s.dbilldate >=#param1#
+ and   s.dbilldate <=#param2#
+ and ((#param5# is not null or len(#param5#) <> 0) and  sb.frownote  like '%'||#param5#||'%'  or  (#param5# is null or len(#param5#) = 0))  
+ and  sb.dr =0 and s.dr = 0

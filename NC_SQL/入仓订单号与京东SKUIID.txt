@@ -1,0 +1,9 @@
+select  s.vreceiptcode,sb.frownote from so_sale s
+join so_saleorder_b sb on s.csaleid = sb.csaleid 
+where s.coperatorid = #param3#
+and   s.ccustomerid = #param4#
+and   s.dbilldate >=#param1#
+and   s.dbilldate <=#param2#
+and ((#param5# is not null or len(#param5#) <> 0) and  sb.frownote  like '%'||#param5#||'%'  or  (#param5# is null or len(#param5#) = 0))  
+and   s.dr =0
+and   sb.dr = 0

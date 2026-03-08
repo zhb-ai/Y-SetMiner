@@ -1,0 +1,60 @@
+select        r.vreceiptcode,
+              (case when r.fstatus = 1 then '自由' 
+                   when r.fstatus = 7 then '审批中' 
+                   when r.fstatus = 2 then '审批'
+                   when r.fstatus = 6 then '完成'   
+                   else '' end ) 状态 , 
+              (case when de.docname is null then r.vdef5 else de.docname end)   销方公司 ,
+              (case when dee.docname is null then r.vdef7 else dee.docname end) 货运公司 ,               
+              r.dbilldate,
+              cc.custname,   
+              cp.psnname manager,           
+              p.psnname,
+              deptname,
+              storname,
+              r.vnote,
+              ur.user_name  制单人, 
+              rb.blargessflag 是否赠送,
+              rb.crowno,
+              width,
+              length,
+              invpinpai,
+              height,
+              pp.PLine 产品线,
+              pp.PLCharge 负责人,
+              invcode,
+              invname, 
+              nvl(rb.nnumber,0)  订单数量,
+              nvl(rb.noriginalcurtaxprice,0) 单价，
+              nvl(rb.nsummny,0) 金额
+            from so_saleorder_b rb
+            join so_sale r
+              on rb.csaleid = r.csaleid 
+            join bd_cumandoc c on r.ccustomerid = c.pk_cumandoc  
+            join bd_cubasdoc cc on c.pk_cubasdoc = cc.pk_cubasdoc
+            
+            left join bd_psndoc cp on c.pk_resppsn1 = cp.pk_psndoc
+            left join bd_defdoc de on r.pk_defdoc5 = de.pk_defdoc
+            left join bd_defdoc dee on r.pk_defdoc7 = dee.pk_defdoc
+            join bd_psndoc p on r.cemployeeid = p.pk_psndoc
+            join bd_deptdoc d on r.cdeptid = d.pk_deptdoc
+            join sm_user ur on r.coperatorid = ur.cuserid    
+            join bd_stordoc s on r.cwarehouseid = s.pk_stordoc 
+            join bd_invbasdoc i on rb.cinvbasdocid = i.pk_invbasdoc  
+            left join v_zlw_prodline pp on i.pk_prodline = pp.pk_prodline     
+            where ((#rq1# is not null or len(#rq1#) <> 0) and  r.dbilldate >=  #rq1#  or  (#rq1# is null or len(#rq1#) = 0))  
+              and ((#rq2# is not null or len(#rq2#) <> 0) and  r.dbilldate <=  #rq2#  or  (#rq2# is null or len(#rq2#) = 0))  
+              and  ((#dl# is not null or len(#dl#) <> 0) and  i.width  like '%'||#dl#||'%'  or  (#dl# is null or len(#dl#) = 0))  
+              and  ((#pl# is not null or len(#pl#) <> 0) and  i.length  like '%'||#pl#||'%'  or  (#pl# is null or len(#pl#) = 0))  
+              and  ((#pp# is not null or len(#pp#) <> 0) and  i.invpinpai  like '%'||#pp#||'%'  or  (#pp# is null or len(#pp#) = 0))  
+              and  ((#mg# is not null or len(#mg#) <> 0) and  c.pk_resppsn1 =  #mg#  or  (#mg# is null or len(#mg#) = 0))  
+              and  ((#zdr# is not null or len(#zdr#) <> 0) and  r.coperatorid =  #zdr#  or  (#zdr# is null or len(#zdr#) = 0))  
+              and  ((#bm# is not null or len(#bm#) <> 0) and  r.cdeptid =  #bm#  or  (#bm# is null or len(#bm#) = 0))    
+              and  ((#ywy# is not null or len(#ywy#) <> 0) and  r.cemployeeid =  #ywy#  or  (#ywy# is null or len(#ywy#) = 0))  
+              and  ((#zt# is not null or len(#zt#) <> 0) and (( r.fstatus = 1 and  #zt# = '自由') or ( r.fstatus = 7 and  #zt# = '审批中')
+               or ( r.fstatus = 2 and  #zt# = '审批')
+               or ( r.fstatus = 6 and  #zt# = '完成'))
+               or  (#zt# is null or len(#zt#) = 0)) 
+             
+              and r.dr = 0
+              and rb.dr = 0

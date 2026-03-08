@@ -1,0 +1,97 @@
+select dd.deptname 专管部门,
+       pp.psnname 客户经理,
+       d.deptname 部门,
+       p.psnname  业务员,
+       custcode  客户编码,
+       custname  客户,
+       cb.def10  开票单位,
+       cb.taxpayerid 税号,
+       si.vdef5 销方公司,
+       si.vdef11 属性,
+       storname  出货仓库,
+       (case when si.fstatus = 1 then '未审批'
+            when si.fstatus = 2 then '已审批'
+       end ) 状态,
+       (case when fb.isverifyfinished = 'N' then '未核销'
+            when fb.isverifyfinished = 'Y' then '已核销' 
+         else '放货/赠品' end) 是否核销,
+       si.dbilldate 发票日期,
+       sib.coriginalbillcode 订单号,
+       bu.businame 业务流程,
+       s.pk_defdoc8   业务备注,
+       s.vnote 备注,
+       sib.cupsourcebillcode 出库单号,
+       si.vreceiptcode 发票号,
+       (case
+         when sib.creceipttype = '30' then
+          ssm.user_name
+         when sib.creceipttype = '3U' then
+          sam.user_name
+         else
+          ''
+       end) 订单制单人,
+       sm.user_name 审核人,
+       si.dapprovedate 审核日期,
+       i.width 大类,
+       i.length 品类,
+       i.invpinpai 品牌,
+       i.height   小类,
+       i.def19 开票名称,
+       i.invcode 编码,
+       i.invname 型号,
+       sib.blargessflag 是否赠送,
+       sib.nnumber 数量,
+       sib.noriginalcurtaxnetprice 价格,
+       sib.nsummny 价税合计,
+       s.pk_defdoc6 收货人,
+       s.pk_defdoc17 收货电话,
+       s.vdef20 收货地址
+  from so_saleinvoice si
+  join so_saleinvoice_b sib
+    on si.csaleid = sib.csaleid
+   and sib.dr = 0
+  left join arap_djfb fb on sib.csourcebillbodyid = fb.cksqsh and fb.dr =0 
+  join bd_invbasdoc i
+    on sib.cinvbasdocid = i.pk_invbasdoc
+  join bd_cumandoc m on si.creceiptcorpid = m.pk_cumandoc  
+  join bd_cubasdoc cb on m.pk_cubasdoc =  cb.pk_cubasdoc and m.custflag in ('0','2')
+  join bd_psndoc pp on m.pk_resppsn1 = pp.pk_psndoc
+  join bd_deptdoc dd on m.pk_respdept1 = dd.pk_deptdoc
+  join bd_psndoc p on si.cemployeeid = p.pk_psndoc
+  join bd_deptdoc d on si.cdeptid = d.pk_deptdoc
+  join bd_stordoc st on si.cwarehouseid = st.pk_stordoc
+  join bd_busitype bu on si.cbiztype = bu.pk_busitype 
+  left join so_sale s
+    on sib.coriginalbillcode = s.vreceiptcode
+  left join sm_user ssm
+    on s.coperatorid = ssm.cuserid
+  left join so_apply sa
+    on sib.coriginalbillcode = sa.vreceiptcode
+  left join sm_user sam
+    on sa.coperatorid = sam.cuserid
+  left join sm_user sm
+    on si.capproveid = sm.cuserid 
+ where 
+    si.dr = 0
+   and sib.dr = 0
+   and ((#rq1# is not null or len(#rq1#) <> 0) and si.dbilldate >= #rq1# or  (#rq1# is null or len(#rq1#) = 0))
+   and ((#rq2# is not null or len(#rq2#) <> 0) and si.dbilldate <= #rq2# or  (#rq2# is null or len(#rq2#) = 0))
+   
+   and ((#rq11# is not null or len(#rq11#) <> 0) and si.dapprovedate >= #rq11# or  (#rq11# is null or len(#rq11#) = 0))
+   and ((#rq22# is not null or len(#rq22#) <> 0) and si.dapprovedate <= #rq22# or  (#rq22# is null or len(#rq22#) = 0))
+    
+   
+   and ((#zt# is not null or len(#zt#) <> 0) and ((si.fstatus =1 and #zt#='未审批') or (si.fstatus =2 and #zt#='已审批')) or  (#zt# is null or len(#zt#) = 0))
+   
+   and ((#zgbm# is not null or len(#zgbm#) <> 0) and m.pk_respdept1 = #zgbm# or  (#zgbm# is null or len(#zgbm#) = 0))
+   and ((#khjl# is not null or len(#khjl#) <> 0) and m.pk_resppsn1 = #khjl# or  (#khjl# is null or len(#khjl#) = 0))
+   and ((#bm# is not null or len(#bm#) <> 0) and si.cdeptid = #bm# or  (#bm# is null or len(#bm#) = 0))
+   and ((#ywy# is not null or len(#ywy#) <> 0) and si.cemployeeid = #ywy# or  (#ywy# is null or len(#ywy#) = 0))
+   and ((#def5# is not null or len(#def5#) <> 0) and si.pk_defdoc5 = #def5# or  (#def5# is null or len(#def5#) = 0))
+   and ((#kh# is not null or len(#kh#) <> 0) and si.creceiptcorpid = #kh# or  (#kh# is null or len(#kh#) = 0))
+   and ((#dl# is not null or len(#dl#) <> 0) and i.width like '%'||#dl#||'%' or  (#dl# is null or len(#dl#) = 0))
+   and ((#pl# is not null or len(#pl#) <> 0) and i.length like '%'||#pl#||'%' or  (#pl# is null or len(#pl#) = 0))
+   and ((#pp# is not null or len(#pp#) <> 0) and i.invpinpai like '%'||#pp#||'%' or  (#pp# is null or len(#pp#) = 0))
+   and ((#xl# is not null or len(#xl#) <> 0) and i.height like '%'||#xl#||'%' or  (#xl# is null or len(#xl#) = 0))
+   and ((#xh# is not null or len(#xh#) <> 0) and sib.cinventoryid = #xh# or  (#xh# is null or len(#xh#) = 0))
+   and (i.invmnecode like '%' || #nn# || '%'or i.invname like '%' || #nn# || '%'or i.invcode = #nn#   )

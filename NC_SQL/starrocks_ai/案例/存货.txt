@@ -1,0 +1,75 @@
+select 存货编码,sum(现存量) 现存量 ,城市 from (
+                        select
+                        bb.invcode 存货编码,
+                        SUM(dd.nonhandnum) 现存量 ,
+                        case when dd.storname in ('仁和云仓中山库',
+                        '中山慧采仓', 
+                        '京东pop仁和-云仓-中山仓',
+                        '京东慧采耐力-中山云仓',
+                        '京东慧采大智-中山云仓') then '中山云仓'
+                        when dd.storname = '科贸3A003' then '科贸'
+                        when dd.storname = '盛购2-650' then '盛购'
+                        when dd.storname in ('成都仓','重庆仓') then '成都'
+                        else
+                        replace(dd.storname,'仓','') end  as 城市
+                        from nc5x.bd_invbasdoc bb
+                        left join ( select aa.cinvbasid , aa.cwarehouseid, aa.nonhandnum,cc.pk_stordoc,cc.storname,cc.storcode
+                        from nc5x.ic_onhandnum aa
+                        join nc5x.bd_stordoc cc
+                        on aa.cwarehouseid = cc.pk_stordoc where cc.dr =0  ) dd
+                        on dd.cinvbasid = bb.pk_invbasdoc
+                        where dd.storname in ('成都仓','重庆仓','沈阳仓','南京仓','哈尔滨仓','西安仓','北京仓','仁和云仓中山库',
+                        '中山慧采仓',
+                        '京东pop仁和-云仓-中山仓',
+                        '京东慧采耐力-中山云仓',
+                        '京东慧采大智-中山云仓','科贸3A003','盛购2-650')
+                        and dd.nonhandnum <> 0 
+                        and bb.length not like '复印%'
+                        GROUP BY bb.invcode ,dd.storname
+
+                        ) group by 存货编码,城市
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+SELECT warehouse as '仓库',a.invcode as '存货编码',bh_num as '基数' 
+FROM `nc_km_bhl` as a
+left join NC_product as b on a.invcode=b.invcode
+where b.category not like '复印%' 
+
+
+SELECT 
+        distinct 
+        z.product_incode as 存货编码 ,c.actual_city as 城市,
+        c.thirty_sales_num/30 as 日销  
+        FROM  (
+        SELECT invbasdoc,actual_city  ,
+        sum(ninety_sales_num)ninety_sales_num ,
+        sum(thirty_sales_num)thirty_sales_num,
+        count(DISTINCT g.customer_key) customer_num FROM nc_purchase_stock_alert_sales_nums  as g
+        left join (SELECT DISTINCT customer_key,stock_code  from nc_purchase_stock_alert_customer_remarks ) as k 
+        on g.customer_key =k.customer_key
+        where k.customer_key is null 
+        GROUP BY invbasdoc,actual_city  
+        ) as c 
+        left join nc_purchase_stock_alert_product_information  as z 
+        on z.product_primary_key = c.invbasdoc 
+        where (ifnull(big_class,'11') in ('原装') or (ifnull(big_class,'11') = '打印机' and ifnull(brand,'11') not like '%华为%'))
+        and z.category not like '复印%'
+
+
+
+
+
+
+

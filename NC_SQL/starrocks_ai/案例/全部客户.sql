@@ -1,0 +1,9 @@
+  select c.*,case when c.psnname ='但波' then '贵州'
+                when c.psnname ='杨守情'then '河南'
+                 when c.psnname ='张贺龙'then '吉林'
+                    when c.psnname ='孟庆伟'then '内蒙古'
+                       when c.psnname ='余国永'then '青海'
+                          when c.psnname ='彭世烨'then '陕西'
+                             when c.psnname ='范增'then '沈阳办公'
+                              when c.psnname ='闫广军'then '沈阳办公'end 区域
+    from nc5x.v_zlw_cust  c where c.deptname ='区域销售部'and  c.linkman1 is not null   -- and c.linkman1 is not null 

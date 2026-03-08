@@ -1,0 +1,144 @@
+SELECT distinct * FROM 
+(
+select 
+       cu.n_deptname,cu.psnname,cu.sealflag, custflag,
+       def3,
+       def13,
+       cu.sf,
+       cu.cs,
+       pricegroup,
+       cu.custcode,
+       cu.custname,
+       cmnecode,
+       kpmc,
+       taxpayerid,
+       addphone,
+       bankinfo,cu.RATIFYDATE, 
+       cu.nlimitmny,nnlimitmny,cu.termname,
+       (case when nnlimitmny > 0 then innerctldays||'天' else '0天' end) Ntermname,
+       cu.mobilephone3,cu.bp3, 
+       cu.linkman1,cu.phone1,cu.mobilephone1,cu.bp1,cu.conaddr 
+from (  
+   SELECT nvl(cum.deptcode,'空')  deptcode,
+       nvl(cum.deptname,'空')  deptname,
+       nvl(cum.n_deptname,'空') n_deptname,
+       nvl(cum.psnname,'空') psnname,
+       (case when custflag in ('0','2') then '客户' else '供应商' end) custflag,
+       (case when dq.sf is null then cl.areaclname else dq.sf end ) sf,
+       (case when dq.cs is null then cl.areaclname else dq.cs end ) cs,
+       de.docname,
+       cum.def77 mobilephone3,
+       def88 bp3,
+       cum.sealflag,
+       cum.frozenflag,
+       (case
+         when cub.def3 = '0001C11000000012TJ3X' then
+          '商桥'
+         else
+          ''
+       end) def3,
+       cub.def13,
+       pricegroup,
+       cub.custcode,
+       cub.custname,
+       
+       cum.cmnecode,
+       cub.DEF10 kpmc,
+       cub.taxpayerid,
+       cub.def11 addphone,
+       cub.def12 bankinfo,
+       innerctldays,
+       nlimitmny,
+       Nnlimitmny,
+       cum.termname,
+       (case when cum.developdate is not null or length(ltrim(rtrim(cum.developdate))) > 0   then cum.developdate else (case when cum.ratifydate is not null then cum.ratifydate else substr(cum.ts,1,10) end)  end) ratifydate ,
+       (case when cum.termid = '01' then 0 else to_number(cum.termid) end ) termid,
+       cub.pk_cubasdoc,
+       cum.pk_cumandoc,
+       (case when cub.linkman1 is null then cum.linkman else cub.linkman1 end ) linkman1,
+       cub.phone1,
+       (case when cub.mobilephone1 is null then cum.mobilephone else cub.mobilephone1 end )mobilephone1 ,cub.bp1,cub.conaddr
+  FROM bd_cubasdoc cub
+  left join (select de.pk_defdoc,de.docname from bd_defdoc de join bd_defdoclist dl on de.pk_defdoclist = dl.pk_defdoclist and dl.doclistname ='客商类型') de on cub.def4 = de.pk_defdoc
+   join (select  substr(deptcode,1,4) deptcode,
+                (case
+                 when substr(dept.deptcode, 1, 4) = '0303' then
+                  '北京市场部'
+                 when substr(dept.deptcode, 1, 4) = '0304' and deptcode <> '030400' then
+                  '外阜市场部'
+                 when substr(dept.deptcode, 1, 4) = '0310' then
+                  '项目部'
+                 when dept.deptcode in ('100501','10050103','10050104','10050106','10050111','10050112') then 
+                   
+                  '京东慧采'
+                 when substr(dept.deptcode, 1, 2) = '10' and dept.deptcode <> '100104' then
+                  '线上'
+                 else
+                  dept.deptname
+               end) deptname,
+               dept.deptname n_deptname,
+               psn.psnname psnname,
+               def7.docname def77,
+               def8.docname def88,
+               df.docname pricegroup,
+               pay.termname,
+               pay.termid,innerctldays,
+               redit.nlimitmny,
+               reditt.nlimitmny Nnlimitmny,
+               cum.developdate,
+               cumm.sealflag,
+               cumm.frozenflag,
+               cum.ratifydate,cum.pk_cumandoc,cum.pk_cubasdoc,mobilephone,linkman,cum.ts,cmnecode,cum.custflag
+          from bd_cumandoc cum
+          join (select distinct pk_cubasdoc,(CASE WHEN instr(frozenflag,'Y') > 0 THEN 'Y' ELSE 'N' END ) frozenflag,
+                                   (case when sealflag is not null or length(sealflag)> 0 then 'Y' ELSE 'N' END )sealflag
+                     from ( select pk_cubasdoc,wm_concat(cumm.frozenflag) over(partition by cumm.pk_cubasdoc) frozenflag,
+                                          wm_concat(cumm.sealflag) over(partition by cumm.pk_cubasdoc) sealflag
+                             from  bd_cumandoc cumm )
+                          )cumm  on cum.pk_cubasdoc = cumm.pk_cubasdoc
+             join bd_deptdoc dept
+            on cum.pk_respdept1 = dept.pk_deptdoc
+             join bd_psndoc psn
+            on cum.pk_resppsn1 = psn.pk_psndoc
+          left join bd_payterm pay
+            on cum.pk_payterm = pay.pk_payterm
+           and cum.dr = 0
+          left join bd_defdoc def7 on cum.def7 = def7.pk_defdoc
+          left join bd_defdoc def8 on cum.def8 = def8.pk_defdoc
+          left join bd_defdoc df on cum.pk_pricegroupcorp = df.pk_defdoc
+          left join so_cucredit redit
+              on cum.pk_cumandoc = redit.pk_cumandoc
+             and redit.climittypeid = '0001A110000000002EXU'
+             and redit.vcredittypename = '2'
+             and redit.dr =0
+   
+            left join so_cucredit reditt
+              on cum.pk_cumandoc = reditt.pk_cumandoc
+             and reditt.climittypeid = '0001A110000000002EXV'
+             and reditt.vcredittypename = '2'
+             and reditt.dr =0
+          where   cum.custflag in ('0','1', '2','3')
+                and cum.pk_corp = '1006'
+                and cum.dr = 0
+                and  ((#ywy# is not null or len(#ywy#) <> 0) and  cum.pk_resppsn1 =#ywy#  or  (#ywy# is null or len(#ywy#) = 0)) 
+                and cum.pk_cumandoc not in ('1006c110000000F1UJPP','0001C11000000017LX8D')
+                
+                ) cum
+    on cub.pk_cubasdoc = cum.pk_cubasdoc
+
+  
+  left join
+  (
+  select cl.pk_areacl,c.areaclname sf,cl.areaclname cs from bd_areacl c join bd_areacl cl on c.pk_areacl = cl.pk_fatherarea
+
+  )dq on cub.pk_areacl = dq.pk_areacl
+  left join bd_areacl cl on cub.pk_areacl = cl.pk_areacl
+  
+   
+  where ((#ch# is not null or len(#ch#) <> 0) and  ( cub.custname like '%'||#ch#||'%' or  cub.custcode like '%'||#ch#||'%'  or  cub.def10 like '%'||#ch#||'%' ) or  (#ch# is null or len(#ch#) = 0)) 
+  and ((#kp# is not null or len(#kp#) <> 0) and  cub.def10 like '%'||#kp#||'%'  or  (#kp# is null or len(#kp#) = 0))  
+     
+) cu   
+ 
+ order by cu.n_deptname,cu.psnname,cu.sf,cu.cs,cu.custcode
+ )A

@@ -1,0 +1,52 @@
+select 
+客户主键
+,sum(兼容销售额)  兼容销售额
+,sum(原装销售额)  原装销售额
+,sum(打印机销售额)  打印机销售额
+,sum(电脑PC销售额)  电脑PC销售额
+,sum(华为销售额)  华为销售额
+from (
+select 
+cu.deptname as 市场部,
+cu.n_deptname as 部门,
+cu.psnname as 业务员,
+cu.pk_cubasdoc 客户主键,
+cu.custcode as 客户编码,
+cu.custname as 客户名称 ,
+ib.invpinpai as 品牌,
+ib.nsummny as 销售额,
+ib.width as 大类,
+case when ib.width = '兼容' then  ib.nsummny else 0 end 兼容销售额
+,case when ib.width = '原装' then  ib.nsummny else 0 end 原装销售额
+,case when ib.width = '打印机' then  ib.nsummny else 0 end 打印机销售额
+,case when ib.width = '电脑PC' then  ib.nsummny else 0 end 电脑PC销售额
+,case when ib.invpinpai LIKE '%华为%' then  ib.nsummny else 0 end 华为销售额
+from nc5x.so_saleinvoice ii
+join (select ib.csaleid,ib.nnumber,ib.nsummny,ch.invpinpai,ch.height,ch.width,ch.length,ch.invname,ch.invcode,ib.blargessflag ,ch.pk_invbasdoc,ib.coriginalbillcode
+from nc5x.so_saleinvoice_b ib
+join nc5x.bd_invbasdoc ch
+on ib.cinvbasdocid = ch.pk_invbasdoc
+) ib
+on ib.csaleid = ii.csaleid
+left join nc5x.v_zlw_cust cu 
+on ii.creceiptcorpid = cu.pk_cumandoc
+LEFT join nc5x.bd_busitype  yw
+on ii.cbiztype = yw.pk_busitype
+left join nc5x.bd_stordoc ck
+on ii.cwarehouseid = ck.pk_stordoc
+left  join  nc5x.so_sale m 
+on ib.coriginalbillcode =m.vreceiptcode
+left join nc5x.v_zlw_cust cuu 
+on m.creceiptcorpid = cuu.pk_cumandoc
+left join nc5x.bd_defdoc bd 
+on ii.PK_DEFDOC5 = bd.PK_DEFDOC  
+left join nc5x.bd_defdoc bdd 
+on m.PK_DEFDOC5 = bdd.PK_DEFDOC  
+where   
+length(invcode) > 5 
+and  ii.dr=0 
+and  cu.n_deptname <> '财务部'
+and  ii.dbilldate >= to_char(sysdate-181,'yyyy-mm-dd')
+-- and ii.dbilldate >= '2025-04-01'
+and ib.width in ('兼容','原装','打印机','电脑PC')
+) group by 客户主键

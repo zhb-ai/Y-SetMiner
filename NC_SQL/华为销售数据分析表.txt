@@ -1,0 +1,24 @@
+select  deptname  部门,
+             substr(dbilldate,1,4) 年,
+             substr(dbilldate,6,2) 月,
+             dbilldate 日期,
+             vreceiptcode 订单号,
+             busitypename 业务流程,
+             vdef5 销方公司,
+             s.barcode SN,
+             s.invcode 存货编码,
+             b.invname 存货名称,
+             invpinpai 品牌,
+             length 品类,
+             SL 数量,
+             nsummny 销售额
+  from DW_HWSPEC_REPORT @dw s
+join bd_invbasdoc b on s.invcode = b.invcode
+where s.flag = 'm'
+and  ((#rq1# is not null or len(#rq1#) <> 0) and  dbilldate >= #rq1#  or  (#rq1# is null or len(#rq1#) = 0)) 
+and ((#rq2# is not null or len(#rq2#) <> 0) and  dbilldate <= #rq2#   or  (#rq2# is null or len(#rq2#) = 0)) 
+and ((#code# is not null or len(#code#) <> 0) and  vreceiptcode like '%'||#code#||'%'  or  (#code# is null or len(#code#) = 0)) 
+and ((#dept# is not null or len(#dept#) <> 0) and  deptname like '%'||#dept#||'%'  or  (#dept# is null or len(#dept#) = 0)) 
+and ((#pp# is not null or len(#pp#) <> 0) and  invpinpai like '%'||#pp#||'%'  or  (#pp# is null or len(#pp#) = 0)) 
+and ((#pl# is not null or len(#pl#) <> 0) and  length like '%'||#pl#||'%'  or  (#pl# is null or len(#pl#) = 0)) 
+and ((#xh# is not null or len(#xh#) <> 0) and  b.invname like '%'||#xh#||'%'  or  (#xh# is null or len(#xh#) = 0))

@@ -1,0 +1,77 @@
+select * from 
+(select im.ABCTYPE 等级,
+       ib.invname     as 型号,     
+       im.refsaleprice    as Z, 
+       trunc(im.lowestprice,1)  as 限价,
+       ib.def2        as 装箱数,
+       io.storname    as 仓库,
+       nvl(io.nonhandnum,0)    as 现存量,
+       nvl(io.ddz,0)   as 订单占用, 
+       nvl(io.ddc,0)   as 待调出,
+       round(nvl(im.def2,0)) 零售指导价,
+       ib.def8        as 前端参数, 
+       ib.def7        as 后端备注,       
+       ib.def3        as 出单备注,        
+       pe.PLine       as 产品线,
+       pe.PLCharge    as 负责人,
+       ib.invpinpai   as 品牌,
+       ib.length      as 品类,
+       ib.height      as 小类,
+       ib.width       as 大类,
+       ib.invcode     as 编码,
+       
+       ib.def5        as 页数,
+       ib.def6        as 耗材净含量,
+       
+       ib.def18       as 行业型号 ,
+       ib.memo        as 长宽高,
+       ib.unitweight  as 重量,
+       ib.unitvolume  as 体积, 
+       
+       ib.invbarcode 码,
+       s.taxcode     税目编码,  
+       s.taxname     税目名称,  
+       ib.invmnecode  as 助记码,ib.invtype,ib.def19 税票型号,
+       nvl(im.def5,0) 代理价,
+       ib.createtime 建档时间
+  from bd_invbasdoc ib
+  left join bd_taxitems s  on ib.pk_taxitems = s.pk_taxitems
+  left join v_zlw_prodline pe on ib.pk_prodline = pe.pk_prodline
+  inner join bd_invmandoc im 
+    on (ib.pk_invbasdoc = im.pk_invbasdoc and
+       im.pk_corp = '1006' and im.dr = 0 and
+       ib.dr = 0 and im.sealflag <> 'Y' and ib.invcode not in ('JA0301','CJ0023','CJ0022')) 
+  
+  left join (
+  
+  select STORNAME,IO.Cinventoryid,sum(NONHANDNUM) NONHANDNUM,sum(ddz) ddz,sum(ddc) ddc from (
+  
+  select io.cwarehouseid,IO.Cinventoryid,IO.NONHANDNUM,0 ddz,0 ddc from ic_onhandnum io 
+  
+  union all
+  
+  select f.cwarehouseid,f.cinventoryid,0 NONHANDNUM, nvl(nonsonum,0) ddz,nvl(f.nrsvnum2,0) ddc  from ic_atp f
+  union all
+  select f.cwarehouseid,f.cinventoryid,0 NONHANDNUM, nvl(nonsonum,0) ddz,nvl(f.nrsvnum2,0) ddc from ic_atp_f f  
+  )io     
+  join bd_stordoc st on io.cwarehouseid = st.pk_stordoc and st.pk_corp = '1006' and storCODE <> '038'   and storname not like '%寄售仓'  and storname not like '维修站%'  and storname not like '%残品库' and nvl(st.sealflag,'N') = 'N' 
+  group by STORNAME,IO.Cinventoryid
+  
+  )io
+  on  im.pk_invmandoc = io.Cinventoryid  
+    
+ where (ib.invmnecode like '%' || #nn# || '%'
+ or ib.invname like '%' || #nn# || '%'
+  or ib.invcode = #nn#   ) 
+and ((#dl# is not null or len(#dl#  ) <> 0 ) and ib.width =  #dl#  or (#dl#   is  null or len(#dl# ) = 0 ))
+and ((#pl# is not null or len(#pl#  ) <> 0 ) and ib.length like  '%'|| #pl#||'%'  or (#pl#   is  null or len(#pl# ) = 0 ))
+and ((#pp# is not null or len(#pp#  ) <> 0 ) and ib.invpinpai like  '%'|| #pp#||'%'  or ( #pp#   is  null or len(#pp# ) = 0 ))
+and ((#jd# is not null or len(#jd#  ) <> 0 ) and ib. createtime >=  #jd#||' 00:00:00'  or ( #jd#   is  null or len(#jd# ) = 0 ))
+and ib.width in ('兼容','原装','打印机','电脑PC','智能家居','周边外设','礼品') 
+and ib.invpinpai <> '扬帆耐立网络版'
+and ib.invpinpai <> '盈佳网络版' 
+
+and substr(ib.invcode,1,2) <> '98' 
+ order by invcode asc
+) where (#if#  = '是' and 现存量 != 0) or  (#if# = '否'  and 现存量 = 0 ) or (#if#  is null )
+ order by 编码 asc

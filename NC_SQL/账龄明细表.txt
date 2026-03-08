@@ -1,0 +1,121 @@
+select d.deptname 专管部门,
+               p.psnname  客户经理,
+               dd.deptname 部门,
+               pp.psnname  业务员,
+               cu.custcode 编码,
+               cu.custname 客户,   
+               xf.docname  销方公司, 
+               fb.djbh 单据号,
+               fb.ddh  订单号,
+               lx.businame 业务流程,
+               zb.effectdate 生效日期,
+               (CASE WHEN lx.busicode in ('s001','s003','s020') then zb.effectdate
+                 else x.xydqr end )信用到期日,
+               TO_DATE(TO_CHAR(sysdate,'YYYY-MM-DD'),'YYYY-MM-DD')  - TO_DATE((CASE WHEN lx.busicode in ('s001','s003','s020') then zb.effectdate
+                 else x.xydqr end ),'YYYY-MM-DD')  距结账日期,
+               sum(case when FB.DJDL = 'ys' then ( case when nvl(fb.jfbbje,0) =0 then nvl(fb.dfbbje,0) else nvl(fb.jfbbje,0) end) else 
+                   -( case when nvl(fb.jfbbje,0) =0 then nvl(fb.dfbbje,0) else nvl(fb.jfbbje,0) end) 
+               end  ) 单据金额,
+               sum(case when TO_DATE((CASE WHEN lx.busicode in ('s001','s003','s020') then zb.effectdate
+                 else x.xydqr end ),'YYYY-MM-DD') - TO_DATE(TO_CHAR(sysdate,'YYYY-MM-DD'),'YYYY-MM-DD') >= 0 then 
+                (case
+                     when FB.DJDL = 'ys' then
+                      nvl(fb.ybye, 0)
+                     else
+                      -nvl(fb.ybye, 0)
+                   end) else 0 end )zqn,
+                sum(case when TO_DATE((CASE WHEN lx.busicode in ('s001','s003','s020') then zb.effectdate
+                 else x.xydqr end ),'YYYY-MM-DD') - TO_DATE(TO_CHAR(sysdate,'YYYY-MM-DD'),'YYYY-MM-DD') < 0 then 
+                (case
+                     when FB.DJDL = 'ys' then
+                      nvl(fb.ybye, 0)
+                     else
+                      -nvl(fb.ybye, 0)
+                   end) else 0 end )zqw,
+                sum(case when TO_DATE((CASE WHEN lx.busicode in ('s001','s003','s020') then zb.effectdate
+                 else x.xydqr end ),'YYYY-MM-DD') - TO_DATE(TO_CHAR(sysdate,'YYYY-MM-DD'),'YYYY-MM-DD') < 0 and TO_DATE(x.xydqr,'YYYY-MM-DD') - TO_DATE(TO_CHAR(sysdate,'YYYY-MM-DD'),'YYYY-MM-DD') >= -10
+                 then 
+                (case
+                     when FB.DJDL = 'ys' then
+                      nvl(fb.ybye, 0)
+                     else
+                      -nvl(fb.ybye, 0)
+                   end) else 0 end )yy10,    
+                sum(case when TO_DATE((CASE WHEN lx.busicode in ('s001','s003','s020') then zb.effectdate
+                 else x.xydqr end ),'YYYY-MM-DD') - TO_DATE(TO_CHAR(sysdate,'YYYY-MM-DD'),'YYYY-MM-DD') < -10 and TO_DATE(x.xydqr,'YYYY-MM-DD') - TO_DATE(TO_CHAR(sysdate,'YYYY-MM-DD'),'YYYY-MM-DD') >= -30
+                 then 
+                (case
+                     when FB.DJDL = 'ys' then
+                      nvl(fb.ybye, 0)
+                     else
+                      -nvl(fb.ybye, 0)
+                   end) else 0 end )yy30,  
+                sum(case when TO_DATE((CASE WHEN lx.busicode in ('s001','s003','s020') then zb.effectdate
+                 else x.xydqr end ),'YYYY-MM-DD') - TO_DATE(TO_CHAR(sysdate,'YYYY-MM-DD'),'YYYY-MM-DD') < -30 and TO_DATE(x.xydqr,'YYYY-MM-DD') - TO_DATE(TO_CHAR(sysdate,'YYYY-MM-DD'),'YYYY-MM-DD') >= -60
+                 then 
+                (case
+                     when FB.DJDL = 'ys' then
+                      nvl(fb.ybye, 0)
+                     else
+                      -nvl(fb.ybye, 0)
+                   end) else 0 end )yy60, 
+                sum(case when TO_DATE((CASE WHEN lx.busicode in ('s001','s003','s020') then zb.effectdate
+                 else x.xydqr end ),'YYYY-MM-DD') - TO_DATE(TO_CHAR(sysdate,'YYYY-MM-DD'),'YYYY-MM-DD') < -60 and TO_DATE(x.xydqr,'YYYY-MM-DD') - TO_DATE(TO_CHAR(sysdate,'YYYY-MM-DD'),'YYYY-MM-DD') >= -90
+                 then 
+                (case
+                     when FB.DJDL = 'ys' then
+                      nvl(fb.ybye, 0)
+                     else
+                      -nvl(fb.ybye, 0)
+                   end) else 0 end )yy90, 
+                sum(case when TO_DATE((CASE WHEN lx.busicode in ('s001','s003','s020') then zb.effectdate
+                 else x.xydqr end ),'YYYY-MM-DD') - TO_DATE(TO_CHAR(sysdate,'YYYY-MM-DD'),'YYYY-MM-DD') < -90 
+                 then 
+                (case
+                     when FB.DJDL = 'ys' then
+                      nvl(fb.ybye, 0)
+                     else
+                      -nvl(fb.ybye, 0)
+                   end) else 0 end )yyo90          
+          from arap_djfb fb 
+          join arap_djzb zb on fb.vouchid = zb.vouchid
+          join arap_djfkxyb x on fb.fb_oid = x.fb_oid 
+          LEFT JOIN bd_busitype LX on zb.xslxbm = LX.PK_BUSITYPE 
+          left join bd_payterm pa on fb.sfkxyh = pa.pk_payterm
+          left join bd_defdoc xf on zb.zyx5 = xf.pk_defdoc 
+          
+          left join bd_deptdoc dd on fb.deptid = dd.pk_deptdoc
+          left join bd_psndoc pp on fb.ywybm = pp.pk_psndoc
+          
+          join bd_cubasdoc cu on fb.hbbm = cu.pk_cubasdoc
+          join bd_cumandoc cm on cu.pk_cubasdoc = cm.pk_cubasdoc and cm.custflag in ('0','2')
+          left join bd_deptdoc d on cm.pk_respdept1 = d.pk_deptdoc
+          left join bd_psndoc p on cm.pk_resppsn1 = p.pk_psndoc
+          
+         where FB.ISVERIFYFINISHED = 'N'
+           and nvl(FB.bbye, 0) <> 0
+           and FB.billdate >= '2021-01-01'
+           and FB.dwbm = '1006'
+           and FB.DJDL IN ('sk', 'ys')
+           and fb.dr = 0
+           
+           and ((#xydqr# is not null or len(#xydqr#) <> 0) and x.xydqr <= #xydqr#  or  (#xydqr# is null or len(#xydqr#) = 0)) 
+            
+           and ((#dept# is not null or len(#dept#) <> 0) and fb.deptid = #dept#  or  (#dept# is null or len(#dept#) = 0)) 
+           and ((#ywy# is not null or len(#ywy#) <> 0) and fb.ywybm = #ywy# or  (#ywy# is null or len(#ywy#) = 0))           
+           
+          and   ((#zgbm# is not null or len(#zgbm#) <> 0) and cm.pk_respdept1 = #zgbm# or  (#zgbm# is null or len(#zgbm#) = 0)) 
+          and ((#mng# is not null or len(#mng#) <> 0) and cm.pk_resppsn1 = #mng# or  (#mng# is null or len(#mng#) = 0))  
+          and ((#cust# is not null or len(#cust#) <> 0) and cm.pk_cumandoc = #cust# or  (#cust# is null or len(#cust#) = 0))
+          and ((#custname# is not null or len(#custname#) <> 0) and (cu.custname like '%' || #custname# || '%' or cu.custcode = #custname# ) or  (#custname# is null or len(#custname#) = 0))  
+           
+          group by d.deptname  ,
+               p.psnname   ,
+               dd.deptname  ,
+               pp.psnname   ,
+               cu.custcode  ,
+               cu.custname  ,   
+               xf.docname ,
+               fb.djbh  ,
+               fb.ddh   ,lx.busicode,lx.businame,
+               zb.effectdate,x.xydqr

@@ -1,0 +1,103 @@
+---
+description: 用友NC数据仓库SQL开发规范 - 生成报表SQL和物化视图时自动遵循
+globs: ["**/*.sql", "**/*.md"]
+alwaysApply: true
+---
+
+# 用友NC数据仓库 SQL开发规范
+
+## 环境信息
+- 数据库: StarRocks
+- 源系统: 用友NC ERP
+- 默认公司主键: pk_corp = '1006'
+
+## 必须遵循的核心规则
+
+### 1. 过滤条件
+- **所有表**必须添加 `dr = 0`（删除标志）
+- **单据表和管理档案表**必须添加 `pk_corp = '1006'`
+  - 需要pk_corp的表: SO_SALE, SO_SALEINVOICE, SO_SALEINVOICE_B, SO_SQUARE, SO_SQUARE_B, SO_SQUAREDETAIL, IC_ONHANDNUM, IC_GENERAL_H, IA_GENERALLEDGER, TO_BILL, ARAP_DJFB, BD_CUMANDOC, BD_INVMANDOC, BD_PAYTERM, SO_CUCREDIT
+  - **不需要**pk_corp的表: BD_INVBASDOC, BD_STORDOC, BD_CUBASDOC, BD_PSNDOC, BD_DEPTDOC, BD_AREACL, BD_BILLTYPE, BD_BUSITYPE, BD_DEFDOC, SM_USER
+
+### 2. 表名与别名
+- 表名必须**大写**: `BD_INVBASDOC` 而非 `bd_invbasdoc`
+- **不加**数据库名前缀: 不用 `nc5x.BD_INVBASDOC`
+- 所有输出字段必须使用**中文别名**: `inv.invcode AS 存货编码`
+
+### 3. 安全计算
+- 除法必须有**除零保护**: `CASE WHEN 分母=0 THEN 0 ELSE ROUND(分子/分母, 2) END`
+- 金额用 `ROUND(..., 2)`
+- 百分比用 `ROUND(... * 100, 2)`
+- NULL值用 `COALESCE()` 或 `IFNULL()` 处理
+
+### 4. 销售流水统一公式
+```sql
+CASE 
+    WHEN sq.blargessflag = 'Y' THEN 0
+    WHEN sq.vbodydef5 IS NOT NULL AND sq.vbodydef5 != 0 THEN
+        ROUND(sq.vbodydef5 / (1 + sq.ntaxrate * 0.01) * sq.noutnum, 2)
+    ELSE
+        ROUND(sq.noriginalcurmny / (1 + sq.ntaxrate * 0.01), 2)
+END AS 销售流水
+```
+
+### 5. 常用过滤条件
+- 客户筛选: `custflag IN ('0', '2')`
+- 排除赠品: `IFNULL(blargessflag, 'N') = 'N'` 或在计算中用CASE处理
+- 排除特殊编码: `invcode NOT IN ('9805','9807','9809','9810','9899','9898')`
+- 主要品类: `width IN ('兼容','原装','打印机')`
+- 排除封存: `sealflag <> '1'`
+- 出入库已审批: `fbillflag >= 3`
+- 应收未核销: `djdl = 'ys' AND isverifyfinished = 'N'`
+
+### 6. 关键关联关系(必须严格遵守)
+- 存货: `BD_INVBASDOC.pk_invbasdoc = BD_INVMANDOC.pk_invbasdoc`
+- 现存量→存货: `IC_ONHANDNUM.cinvbasid = BD_INVBASDOC.pk_invbasdoc`
+- 现存量→成本: 必须**双字段** `cinventoryid = cinventoryid AND ccalbodyid = crdcenterid`
+- 客商: `BD_CUMANDOC.pk_cubasdoc = BD_CUBASDOC.pk_cubasdoc`（BD_CUMANDOC做主表!）
+- 信用额度: 关联**两次** SO_CUCREDIT (可欠款climittypeid='0001A110000000002EXU' + 临时'0001A110000000002EXV')
+- 地区: BD_AREACL **子查询自关联** (c.pk_areacl = cl.pk_fatherarea)
+- 部门层级: BD_DEPTDOC **自关联** (dept.pk_fathedept = fdept.pk_deptdoc)
+
+## 文件规范
+- 物化视图DDL放在 `视图/` 目录，命名: `{序号}_{视图名}.sql`
+- 报表SQL放在 `报表SQL/` 目录，命名: `{编号}_{报表名}.sql`
+- 每个报表产出两个版本: 物化视图版(推荐) + 原始版本(对数验证)
+- 新增视图后更新 `视图/00_刷新所有视图.sql`
+
+## 物化视图DDL规范（StarRocks 3.5）
+
+创建物化视图时必须遵循：
+
+```sql
+CREATE MATERIALIZED VIEW IF NOT EXISTS {mv_name}
+COMMENT '{中文描述}'
+[PARTITION BY date_trunc('{粒度}', {日期列})]  -- 大MV推荐分区
+DISTRIBUTED BY HASH({主键}) BUCKETS 32
+REFRESH DEFERRED ASYNC EVERY (INTERVAL 1 DAY)   -- 定时刷新 + 延迟首次构建
+PROPERTIES (
+    "enable_spill" = "true",                     -- 大MV防OOM
+    "mv_rewrite_staleness_second" = "86400"      -- 允许查询改写
+)
+AS {query};
+```
+
+关键要点：
+- 使用 `IF NOT EXISTS` 防止重复创建报错
+- 使用 `DEFERRED` 避免创建时立即全量构建
+- 使用 `REFRESH ASYNC EVERY(INTERVAL)` 定时刷新（非REFRESH ASYNC）
+- 大MV必须设置 `enable_spill = true`
+- 手动刷新用: `REFRESH MATERIALIZED VIEW {name} WITH SYNC MODE;`
+- 强制刷新用: `REFRESH MATERIALIZED VIEW {name} FORCE WITH SYNC MODE;`
+- 原子替换用: `ALTER MATERIALIZED VIEW {old} SWAP WITH {new};`
+- 监控状态: `SHOW MATERIALIZED VIEWS;` 关注 is_active 和 last_refresh_state
+
+## 参考文档（均在 docs/ 目录下）
+- `docs/SQL编码规范.md`: SQL编码规则速查手册
+- `docs/业务场景SQL模板.md`: 库存/销售/客户/应收/成本完整SQL模板 + 日期/聚合/特殊字段技巧
+- `docs/StarRocks语法参考.md`: StarRocks数据类型/函数/SQL语法/窗口函数/常见陷阱速查
+- `docs/SQL开发全流程规范.md`: 完整开发流程和检查清单
+- `docs/数据库表关系图.md`: 表关系和关联模式
+- `docs/BI报表需求清单.md`: 报表需求全量清单
+- `docs/物化视图设计.md`: 视图架构设计（基于StarRocks 3.5官方文档）
+- `docs/数据字典.md`: 表结构与字段定义

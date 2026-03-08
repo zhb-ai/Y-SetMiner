@@ -1,0 +1,84 @@
+select
+    nc5x.BD_CUBASDOC.custname,
+    nc5x.BD_CUBASDOC.pk_cubasdoc,
+    bd_billtype.billtypename 出入库方式,
+    ic_general_h.daccountdate 签字日期,
+    ic_general_h.dbilldate  单据日期,
+    bd_stordoc.storname 出库库房,
+    cg.invname 存货名称 ,
+    ic_general_h.vbillcode 单据号,
+    cg.width as 大类,
+    cg.length as 品类,
+    cg.invpinpai as 品牌,
+    cg.height as 小类,
+    ic_general_h.dbilldate 入库时间,
+    sum(nvl(nc5x.ic_general_b.ninnum, 0)) as 数量
+from nc5x.ic_general_h
+left join nc5x.ic_general_b on (nc5x.ic_general_h.cgeneralhid = nc5x.ic_general_b.cgeneralhid)
+left join nc5x.bd_invbasdoc on (nc5x.ic_general_b.cinvbasid = nc5x.bd_invbasdoc.pk_invbasdoc)
+left join nc5x.bd_billtype on (nc5x.ic_general_h.cbilltypecode = nc5x.bd_billtype.pk_billtypecode)
+left join nc5x.BD_CUBASDOC  on nc5x.BD_CUBASDOC.pk_cubasdoc =nc5x.ic_general_b.pk_cubasdoc
+left outer join nc5x.bd_stordoc on (nc5x.ic_general_h.cwarehouseid = nc5x.bd_stordoc.pk_stordoc)
+left join  nc5x.sm_user cu on ic_general_h.coperatorid =cu.cuserid
+ left join  (select ch.invpinpai,ch.height,ch.width,ch.length,ch.invname,ch.invcode,cg.pk_invmandoc,cg.lowestprice,cg.refsaleprice , cg.def3
+        from nc5x.bd_invmandoc cg
+        join nc5x.bd_invbasdoc ch
+        on cg.pk_invbasdoc = ch.pk_invbasdoc) cg
+        on ic_general_b.cinventoryid = cg.pk_invmandoc
+where  nc5x.ic_general_h.pk_cubasdoc='1006C110000000JGMSTU' and bd_billtype.billtypename like '%采购入库%' and dbilldate between '2025-01-01' and '2026-10-31' and ic_general_b.dr = 0 and  nc5x.ic_general_h.fbillflag >= 3
+group by
+nc5x.BD_CUBASDOC.custname,
+nc5x.BD_CUBASDOC.pk_cubasdoc,
+bd_billtype.billtypename ,
+bd_stordoc.storname,
+cg.invname,
+cg.width ,
+cu.user_name,
+cg.length ,
+cg.invpinpai ,
+cg.height ,
+ic_general_h.dbilldate,
+ic_general_h.daccountdate,
+ic_general_h.dbilldate,
+bd_stordoc.storname,
+ic_general_h.vbillcode
+
+
+
+
+
+
+select
+    nc5x.BD_CUBASDOC.custname,
+    cg.INVCODE,
+    cg.invbarcode,
+    cg.invname 存货名称 ,
+    cg.width as 大类,
+    cg.length as 品类,
+    cg.invpinpai as 品牌,
+    cg.height as 小类,
+    sum(nvl(nc5x.ic_general_b.ninnum, 0)) as 数量
+from nc5x.ic_general_h
+left join nc5x.ic_general_b on (nc5x.ic_general_h.cgeneralhid = nc5x.ic_general_b.cgeneralhid)
+left join nc5x.bd_invbasdoc on (nc5x.ic_general_b.cinvbasid = nc5x.bd_invbasdoc.pk_invbasdoc)
+left join nc5x.bd_billtype on (nc5x.ic_general_h.cbilltypecode = nc5x.bd_billtype.pk_billtypecode)
+left join nc5x.BD_CUBASDOC  on nc5x.BD_CUBASDOC.pk_cubasdoc =nc5x.ic_general_b.pk_cubasdoc
+left outer join nc5x.bd_stordoc on (nc5x.ic_general_h.cwarehouseid = nc5x.bd_stordoc.pk_stordoc)
+left join  nc5x.sm_user cu on ic_general_h.coperatorid =cu.cuserid
+ left join  (select ch.invpinpai,ch.height,ch.width,ch.length,ch.invname,ch.invcode,ch.invbarcode,cg.pk_invmandoc,cg.lowestprice,cg.refsaleprice , cg.def3
+        from nc5x.bd_invmandoc cg
+        join nc5x.bd_invbasdoc ch
+        on cg.pk_invbasdoc = ch.pk_invbasdoc) cg
+        on ic_general_b.cinventoryid = cg.pk_invmandoc
+where  nc5x.ic_general_h.pk_cubasdoc='1006C110000000JGMSTU' and bd_billtype.billtypename like '%采购入库%' and dbilldate between '2025-01-01' and '2026-10-31' and ic_general_b.dr = 0 and  nc5x.ic_general_h.fbillflag >= 3
+group by
+nc5x.BD_CUBASDOC.custname,
+cg.INVCODE,
+cg.invbarcode,
+cg.invname,
+cg.width ,
+cg.length ,
+cg.invpinpai ,
+cg.height
+
+

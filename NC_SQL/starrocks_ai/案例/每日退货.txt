@@ -1,0 +1,115 @@
+select 
+客户编码  
+,客户名称  
+,存货编码  
+,存货名称  
+,大类  
+,品类  
+,品牌  
+,小类  
+,数量  
+,是否赠品  
+,业务类型  
+,业务属性 
+,本币价税合计  
+,批发价税合计 
+,价税合计 
+,流水  
+,毛利  
+,成本  
+,市场部 
+,部门 
+,业务员 
+,日期 
+,省
+,市 
+,单据号
+,库房
+,客户主键
+ from (
+select
+hl.vreceiptcode  as 单据号,
+zjs.vreceiptcode, 
+js.vdef8 ,
+js.vdef5 as 所属公司,
+js.csaleid,
+js.vreceiptcode ,
+js.cbodywarehouseid ,
+js.ccustomerid 主键,
+cu.pk_cubasdoc 客户主键,
+cu.custcode as 客户编码,
+nvl(cu.custname,'北京扬帆耐力有限公司') as 客户名称,
+cg.invcode as 存货编码,
+cg.invname as 存货名称,
+cg.width as 大类,
+cg.length as 品类,
+cg.invpinpai as 品牌,
+cg.height as 小类,
+js.nnewbalancenum as 数量,
+js.blargessflag as 是否赠品,
+cg.批发售价,
+cg.代理价,
+cg.最低限价,
+nvl(cg.代理价,cg.批发售价) 批发价,
+yw.businame as 业务类型,
+js.vdef11 as 业务属性,
+case when (cg.批发售价 > (js.nsummny/js.nnewbalancenum) or  js.blargessflag = 'Y') and cg.invpinpai like '%懿%'  then 1 else 0 end 买赠标记,
+case when js.blargessflag = 'Y' then 0 else js.nsummny end  as 本币价税合计 ,
+js.nnewbalancenum*js.vbodydef5 as 批发价税合计,
+(CASE WHEN TO_NUMBER(js.nnewbalancenum*js.vbodydef5)=0 OR js.nnewbalancenum*js.vbodydef5 IS NULL THEN js.nsummny  ELSE js.nnewbalancenum*js.vbodydef5 END) AS 价税合计,
+case when js.blargessflag = 'Y' then 0 else (ROUND((CASE WHEN TO_NUMBER(js.nnewbalancenum*js.vbodydef5)=0 OR js.nnewbalancenum*js.vbodydef5 IS NULL THEN js.nsummny ELSE js.nnewbalancenum*js.vbodydef5 END)/(js.NTAXRATE*0.01+1),2)) end AS 流水,
+case when js.blargessflag = 'Y' then 0 else (ROUND((CASE WHEN TO_NUMBER(js.nnewbalancenum*js.vbodydef5)=0 OR js.nnewbalancenum*js.vbodydef5 IS NULL THEN js.nsummny ELSE js.nnewbalancenum*js.vbodydef5 END)/(js.NTAXRATE*0.01+1),2)) end-js.ncostmny AS 毛利,
+(case  nvl2( TRIM(REGEXP_replace(js.VBODYDEF8,'[0-9|+|-|.]','')),0,1)  when 1 then to_number(js.VBODYDEF8) else 0 end )*(js.nnewbalancenum/abs(js.nnewbalancenum)) as 服务费 ,
+js.ncostmny as 成本,
+cu.deptname as 市场部,
+cu.n_deptname as 部门,
+(CASE WHEN cu.psnname is null then us.psnname else cu.psnname end) as 业务员,
+(case when js.dapprovedate is null then js.dmakedate else js.dapprovedate end )as 日期,
+hl.dapprovedate  审批日期,
+hl.dbilldate 单据日期,
+case when (case when js.dapprovedate is null then js.dmakedate else js.dapprovedate end ) >= to_char(sysdate-91,'yyyy-mm-dd') then (case when js.dapprovedate is null then js.dmakedate else js.dapprovedate end ) else null end 近三月下单日期,   
+substr((case when js.dapprovedate is null then js.dmakedate else js.dapprovedate end ),1,7) 月份,
+substr((case when js.dapprovedate is null then js.dmakedate else js.dapprovedate end ),1,4) 年份,
+dd.storname as 库房,
+cu.sf as 省,
+cu.cs as 市,
+hl.pk_defdoc16 销售省份,
+hl.pk_defdoc20 销售城市,
+hl.vdef20 收货地址,
+su1.user_name as 制单人
+from nc5x.so_squaredetail js
+left join  nc5x.so_square zjs on js.csaleid = zjs.csaleid 
+LEFT join (
+select ch.invpinpai,ch.height,ch.width,ch.length,ch.invname,ch.invcode,cg.pk_invmandoc,ch.unitweight,ch.unitvolume,
+cg.refsaleprice as 批发售价
+,cg.def5 as 代理价 
+,cg.lowestprice   as 最低限价
+from nc5x.bd_invmandoc cg
+join nc5x.bd_invbasdoc ch
+on cg.pk_invbasdoc = ch.pk_invbasdoc )cg
+on js.cinventoryid = cg.pk_invmandoc
+LEFT join nc5x.bd_busitype  yw
+on js.cbiztype = yw.pk_busitype
+LEFT join nc5x.v_zlw_cust  cu
+on js.ccustomerid = cu.pk_cumandoc
+left join nc5x.bd_psndoc  us
+on us.pk_psndoc= js.cemployeeid
+left join nc5x.so_sale hl
+on js.csourcebillid = hl.csaleid
+left join nc5x.sm_user  su1 
+on hl.coperatorid = su1.cuserid
+left join nc5x.bd_stordoc dd
+on js.cwarehouseid = dd.pk_stordoc
+where 
+length(cg.invcode) >= 5
+and js.dr=0
+-- 内层条件修改：将等于改为范围查询
+and (js.dapprovedate between '2026-01-16' and '2026-01-16' 
+     or js.dmakedate between '2026-01-16' and '2026-01-16' )
+) 
+-- 外层条件修改：添加数量小于0的条件
+where 日期 between '2025-01-16' and '2026-01-16'
+and 客户名称 <> '京东-智通仁和（POP一盘货）'
+and 数量 < 0  -- 新增条件：数量小于0
+
+--退货

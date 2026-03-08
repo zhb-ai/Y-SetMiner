@@ -1,0 +1,22 @@
+-- 优化后的SQL
+SELECT 
+    hl.vreceiptcode 单据号,
+    cu.custcode as 客户编码,
+    COALESCE(cu.custname, '北京扬帆耐力有限公司') as 客户名称,
+    cu.deptname as 市场部,
+    cu.n_deptname as 部门, 
+    COALESCE(cu.psnname, us.psnname) as 业务员,
+    us.psnname as 订单业务员,
+    COALESCE(js.dapprovedate, js.dmakedate) as 结算日期,
+    hl.dapprovedate 审批日期,
+    
+    hl.dbilldate 单据日期,
+    hl.nheadsummny 金额 
+FROM nc5x.so_sale hl 
+JOIN nc5x.bd_busitype yw ON hl.cbiztype = yw.pk_busitype AND yw.businame = '放货销售'
+LEFT JOIN nc5x.so_squaredetail js ON js.csourcebillid = hl.csaleid
+LEFT JOIN nc5x.v_zlw_cust cu ON hl.ccustomerid = cu.pk_cumandoc
+LEFT JOIN nc5x.bd_psndoc us ON us.pk_psndoc = hl.cemployeeid
+WHERE hl.dapprovedate >= '2025-07-01' 
+AND hl.dr = 0
+GROUP BY hl.vreceiptcode, cu.custcode, cu.custname, cu.deptname, cu.n_deptname, cu.psnname, us.psnname, js.dapprovedate, js.dmakedate, hl.dapprovedate, hl.dbilldate, hl.nheadsummny
