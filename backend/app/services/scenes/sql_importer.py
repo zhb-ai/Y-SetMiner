@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -44,6 +45,7 @@ class ResolvedField:
     source_tables: list[str]
     source_columns: list[str]
     original_expr: str = ""  # 原始 SQL 表达式，当 field_name 是简化占位名时使用
+    resolution_kind: str = ""
 
 
 class SqlImportService:
@@ -240,6 +242,7 @@ class SqlImportService:
                 "column_name": ", ".join(field.source_columns) if field.source_columns else field.field_name,
                 "source_tables": ", ".join(field.source_tables),
                 "original_expr": field.original_expr,
+                "resolution_kind": field.resolution_kind,
             }
             for field in resolved_fields
         ]
@@ -921,12 +924,14 @@ class SqlImportService:
             lineage_columns.update(resolved["columns"])
 
         primary_source = None
+        resolution_kind = ""
         if len(lineage_tables) == 1:
             primary_source = next(iter(lineage_tables))
         elif len(lineage_tables) > 1:
             primary_source = "derived"
         elif not isinstance(projection, exp.Column):
             primary_source = "derived"
+            resolution_kind = self._classify_unresolved_projection(projection)
 
         return ResolvedField(
             field_name=field_name,
@@ -934,7 +939,20 @@ class SqlImportService:
             source_tables=sorted(lineage_tables),
             source_columns=sorted(lineage_columns),
             original_expr=original_expr,
+            resolution_kind=resolution_kind,
         )
+
+    def _classify_unresolved_projection(self, projection: exp.Expression) -> str:
+        bare_columns = [
+            column
+            for column in projection.find_all(exp.Column)
+            if not column.table and self._normalize_identifier(column.name) not in {"sysdate", "current_date", "current_timestamp"}
+        ]
+        if bare_columns:
+            return "bare_column"
+        if any(isinstance(node, exp.Column) for node in projection.find_all(exp.Column)):
+            return "derived_expression"
+        return "expression_or_constant"
 
     def _resolve_scalar_subquery_sources(
         self,
@@ -1282,7 +1300,16 @@ class SqlImportService:
                     or global_alias_to_table.get(raw_source)
                     or raw_source
                 ) or "unknown"
-                item_id = f"{real_source}::{column['name']}"
+                normalized_source_tables = self._normalize_source_table_list(column.get("source_tables", ""))
+                item_id = self._build_item_identity(
+                    document.name,
+                    real_source,
+                    str(column["name"]),
+                    normalized_source_tables,
+                    str(column.get("column_name", "")),
+                    str(column.get("original_expr", "")),
+                    str(column.get("resolution_kind", "")),
+                )
                 if item_id not in item_map:
                     item_map[item_id] = Item(
                         id=item_id,
@@ -1291,25 +1318,17 @@ class SqlImportService:
                         source=real_source,
                         item_type="column",
                         meta={
-                            "source_tables": ", ".join(
-                                sorted(
-                                    filter(
-                                        None,
-                                        (
-                                            self._normalize_source_name(part.strip())
-                                            for part in str(column.get("source_tables", "")).split(",")
-                                        ),
-                                    )
-                                )
-                            ),
+                            "source_tables": ", ".join(normalized_source_tables),
                             "column_name": str(column.get("column_name", "")),
                             "original_expr": str(column.get("original_expr", "")),
+                            "resolution_kind": str(column.get("resolution_kind", "")),
                         },
                     )
                 relations.append(Relation(entity_id=entity_id, item_id=item_id))
 
         # 构建全局 JOIN 图（所有文件的 join_edges 合并）
         join_graph = self._build_join_graph(documents)
+        lineage_merge_risk_warnings = self._build_lineage_merge_risk_warnings(documents)
 
         # 粒度信息：每个 SQL 文件的粒度键
         granularity_map = {
@@ -1334,6 +1353,7 @@ class SqlImportService:
             ),
             meta={
                 "import_warnings": list(import_warnings or []),
+                "lineage_merge_risk_warnings": lineage_merge_risk_warnings,
                 "join_graph": join_graph,              # {table: {neighbor: [edge_info, ...]}}
                 "granularity_map": granularity_map,    # {sql_name: [key_cols]}
                 "alias_to_table": global_alias_to_table,  # 供前端/图展示使用
@@ -1370,6 +1390,127 @@ class SqlImportService:
                 graph[right_table][left_table].append(edge_info)
         # 转为普通 dict 方便序列化
         return {t: dict(neighbors) for t, neighbors in graph.items()}
+
+    def _build_item_identity(
+        self,
+        document_name: str,
+        real_source: str,
+        field_name: str,
+        source_tables: list[str],
+        column_name: str,
+        original_expr: str,
+        resolution_kind: str,
+    ) -> str:
+        if real_source != "derived":
+            return f"{real_source}::{field_name}"
+
+        signature_payload = self._build_derived_signature_payload(
+            document_name,
+            field_name,
+            source_tables,
+            column_name,
+            original_expr,
+            resolution_kind,
+        )
+        signature_hash = hashlib.sha1(signature_payload.encode("utf-8")).hexdigest()[:12]
+        return f"{real_source}::{field_name}::{signature_hash}"
+
+    def _build_derived_signature_payload(
+        self,
+        document_name: str,
+        field_name: str,
+        source_tables: list[str],
+        column_name: str,
+        original_expr: str,
+        resolution_kind: str,
+    ) -> str:
+        normalized_field_name = self._normalize_identifier(field_name)
+        normalized_column_name = self._normalize_signature_text(column_name)
+        normalized_expr = self._normalize_signature_text(original_expr)
+        normalized_kind = self._normalize_identifier(resolution_kind) or "derived"
+        if source_tables:
+            return "||".join(
+                [
+                    "derived",
+                    normalized_field_name,
+                    "+".join(source_tables),
+                    normalized_expr or normalized_column_name or normalized_field_name,
+                ]
+            )
+        return "||".join(
+            [
+                "derived",
+                normalized_field_name,
+                self._normalize_identifier(document_name),
+                normalized_kind,
+                normalized_expr or normalized_column_name or normalized_field_name,
+            ]
+        )
+
+    def _normalize_source_table_list(self, value: object) -> list[str]:
+        return sorted(
+            {
+                source_name
+                for source_name in (
+                    self._normalize_source_name(part.strip())
+                    for part in str(value or "").split(",")
+                )
+                if source_name
+            }
+        )
+
+    def _normalize_signature_text(self, value: object) -> str:
+        normalized = re.sub(r"\s+", " ", str(value or "").strip().lower())
+        return normalized
+
+    def _build_lineage_merge_risk_warnings(self, documents: list[ParsedSqlDocument]) -> list[str]:
+        buckets: dict[str, dict[str, dict[str, set[str]]]] = defaultdict(dict)
+        for document in documents:
+            for column in document.columns:
+                source_name = self._normalize_source_name(column.get("source_table"))
+                if source_name != "derived":
+                    continue
+                source_tables = self._normalize_source_table_list(column.get("source_tables", ""))
+                if not source_tables:
+                    continue
+
+                field_name = str(column.get("name", "")).strip()
+                signature_payload = self._build_derived_signature_payload(
+                    document.name,
+                    field_name,
+                    source_tables,
+                    str(column.get("column_name", "")),
+                    str(column.get("original_expr", "")),
+                    str(column.get("resolution_kind", "")),
+                )
+                bucket = buckets[field_name].setdefault(
+                    signature_payload,
+                    {"docs": set(), "sources": set(source_tables)},
+                )
+                bucket["docs"].add(document.name)
+                bucket["sources"].update(source_tables)
+
+        warnings: list[str] = []
+        for field_name, signatures in buckets.items():
+            if len(signatures) <= 1:
+                continue
+            involved_docs = sorted({doc for info in signatures.values() for doc in info["docs"]})
+            source_labels = sorted({"+".join(sorted(info["sources"])) for info in signatures.values() if info["sources"]})
+            source_hint = " / ".join(source_labels[:3]) if source_labels else "多个来源"
+            warnings.append(
+                f"⚠ 疑似血缘合并污染：字段 `{field_name}` 在不同 SQL 中存在多个派生来源（{source_hint}）。"
+                f"系统已按血缘拆分处理，涉及 SQL：{self._format_name_hint(involved_docs)}。"
+                "建议复核这些同名字段是否应保留为独立指标。"
+            )
+        return warnings
+
+    def _format_name_hint(self, names: list[str]) -> str:
+        if not names:
+            return "（未知）"
+        hint = "、".join(names[:5])
+        if len(names) > 5:
+            hint += f" 等 {len(names)} 个文件"
+        return hint
 
     def _build_warnings(self, documents: list[ParsedSqlDocument], dataset: SceneDataset) -> list[str]:
         warnings: list[str] = []

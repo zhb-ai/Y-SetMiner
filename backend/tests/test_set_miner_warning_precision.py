@@ -23,7 +23,12 @@ class SetMinerWarningPrecisionTests(unittest.TestCase):
                     name="金额",
                     group="derived",
                     source="derived",
-                    meta={"source_tables": "", "column_name": "nheadsummny", "original_expr": ""},
+                    meta={
+                        "source_tables": "",
+                        "column_name": "nheadsummny",
+                        "original_expr": "",
+                        "resolution_kind": "bare_column",
+                    },
                 ),
                 Item(
                     id="so_sale::单据号",
@@ -54,6 +59,7 @@ class SetMinerWarningPrecisionTests(unittest.TestCase):
         self.assertEqual(len(warnings), 1)
         self.assertIn("放货结算周期.sql", warnings[0])
         self.assertNotIn("放货结算周期-优化.txt", warnings[0])
+        self.assertIn("裸列写法", warnings[0])
 
 
 if __name__ == "__main__":

@@ -1069,6 +1069,7 @@ class SetMinerService:
             warnings.append("当前推荐角色中仍存在 soft SoD 告警组合，请在结果页中进一步审核。")
         if dataset.scene == "sql":
             warnings.extend(dataset.meta.get("import_warnings", []))
+            warnings.extend(dataset.meta.get("lineage_merge_risk_warnings", []))
             warnings.extend(self._check_join_reachability(dataset, units))
             warnings.extend(self._check_expression_source_completeness(dataset, units))
             warnings.extend(self._check_granularity_conflicts(dataset, units))
@@ -1143,24 +1144,48 @@ class SetMinerService:
                 for item_id in item_ids
                 if item_id in item_lookup and self._is_unresolved_derived_item(item_lookup[item_id])
             ]
-            unresolved_expr_fields = [item_lookup[item_id].name for item_id in unresolved_item_ids[:5]]
-            if not unresolved_expr_fields:
+            bare_column_item_ids = [
+                item_id for item_id in unresolved_item_ids if self._get_item_resolution_kind(item_lookup[item_id]) == "bare_column"
+            ]
+            unresolved_expr_item_ids = [
+                item_id for item_id in unresolved_item_ids if item_id not in bare_column_item_ids
+            ]
+
+            if not bare_column_item_ids and not unresolved_expr_item_ids:
                 continue
 
-            relevant_sql_names = sorted(
-                {
-                    entity_name
-                    for item_id in unresolved_item_ids
-                    for entity_name in entity_names_by_item_id.get(item_id, [])
-                    if entity_name
-                }
-            )
-            field_hint = "、".join(unresolved_expr_fields)
-            warnings.append(
-                f"⚠ 宽表 `{unit_name}` 中的表达式字段 {field_hint} 等未能解析出底层来源表。"
-                f"涉及 SQL：{self._format_sql_name_hint(relevant_sql_names or covered_sql_names)}。"
-                "这类字段不会参与 JOIN 孤立判断，建议补充表前缀、显式别名或拆解子查询以完善血缘。"
-            )
+            if bare_column_item_ids:
+                bare_field_hint = "、".join(item_lookup[item_id].name for item_id in bare_column_item_ids[:5])
+                bare_sql_names = sorted(
+                    {
+                        entity_name
+                        for item_id in bare_column_item_ids
+                        for entity_name in entity_names_by_item_id.get(item_id, [])
+                        if entity_name
+                    }
+                )
+                warnings.append(
+                    f"⚠ 宽表 `{unit_name}` 中的字段 {bare_field_hint} 等使用了裸列写法，当前无法稳定确定底层来源表。"
+                    f"涉及 SQL：{self._format_sql_name_hint(bare_sql_names or covered_sql_names)}。"
+                    "建议改为显式表前缀写法，例如 `hl.nheadsummny`。"
+                )
+
+            if unresolved_expr_item_ids:
+                unresolved_expr_fields = [item_lookup[item_id].name for item_id in unresolved_expr_item_ids[:5]]
+                relevant_sql_names = sorted(
+                    {
+                        entity_name
+                        for item_id in unresolved_expr_item_ids
+                        for entity_name in entity_names_by_item_id.get(item_id, [])
+                        if entity_name
+                    }
+                )
+                field_hint = "、".join(unresolved_expr_fields)
+                warnings.append(
+                    f"⚠ 宽表 `{unit_name}` 中的表达式字段 {field_hint} 等未能解析出底层来源表。"
+                    f"涉及 SQL：{self._format_sql_name_hint(relevant_sql_names or covered_sql_names)}。"
+                    "这类字段不会参与 JOIN 孤立判断，建议补充显式别名或拆解子查询以完善血缘。"
+                )
 
         return warnings
 
@@ -1199,6 +1224,10 @@ class SetMinerService:
     def _is_unresolved_derived_item(self, item: object) -> bool:
         source_name = self._normalize_source_name(getattr(item, "group", None) or getattr(item, "source", None))
         return source_name == "derived" and not self._get_item_physical_sources(item)
+
+    def _get_item_resolution_kind(self, item: object) -> str:
+        meta = getattr(item, "meta", {}) or {}
+        return self._normalize_source_name(meta.get("resolution_kind", ""))
 
     def _format_sql_name_hint(self, sql_names: list[str]) -> str:
         if not sql_names:
