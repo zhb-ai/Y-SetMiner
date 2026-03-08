@@ -10,6 +10,7 @@ from app.services.scenes.sql_importer import ParsedSqlDocument, SqlImportService
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SQL_CASE_DIR = REPO_ROOT / "NC_SQL" / "starrocks_ai" / "案例"
+SQL_VIEW_DIR = REPO_ROOT / "NC_SQL" / "starrocks_ai" / "视图SQL"
 
 
 class SqlImportServiceTests(unittest.TestCase):
@@ -152,6 +153,72 @@ class SqlImportServiceTests(unittest.TestCase):
             "financial_nc_assessment_department_achievement",
             {str(column.get("source_table")) for column in nj_doc.columns},
         )
+
+    def test_sanitize_vendor_sql_strips_create_materialized_view_preamble(self) -> None:
+        mv_sql = (
+            "CREATE MATERIALIZED VIEW IF NOT EXISTS MV_TEST\n"
+            "COMMENT 'test'\n"
+            "DISTRIBUTED BY HASH(id) BUCKETS 32\n"
+            "ORDER BY (id)\n"
+            "REFRESH DEFERRED ASYNC EVERY (INTERVAL 1 DAY)\n"
+            "PROPERTIES (\n"
+            "    \"enable_spill\" = \"true\"\n"
+            ")\n"
+            "AS\n"
+            "SELECT a.id, b.name FROM t1 a JOIN t2 b ON a.id = b.fk_id"
+        )
+
+        result, notes = self.service._sanitize_vendor_sql(mv_sql)
+
+        self.assertTrue(result.strip().startswith("SELECT"))
+        self.assertTrue(any("MATERIALIZED VIEW" in note for note in notes))
+
+    def test_sanitize_vendor_sql_strips_create_or_replace_view(self) -> None:
+        view_sql = "CREATE OR REPLACE VIEW v_test AS SELECT id FROM t1"
+
+        result, notes = self.service._sanitize_vendor_sql(view_sql)
+
+        self.assertEqual(result.strip(), "SELECT id FROM t1")
+        self.assertTrue(any("VIEW" in note for note in notes))
+
+    def test_sanitize_vendor_sql_leaves_plain_select_unchanged(self) -> None:
+        plain_sql = "SELECT a.id, b.name FROM t1 a JOIN t2 b ON a.id = b.fk_id"
+
+        result, notes = self.service._sanitize_vendor_sql(plain_sql)
+
+        self.assertEqual(result, plain_sql)
+        self.assertFalse(any("VIEW" in note for note in notes))
+
+    def test_materialized_view_file_parsed_as_ast_with_correct_tables(self) -> None:
+        raw = (SQL_VIEW_DIR / "01_MV_SALES_DETAIL.sql").read_bytes()
+        content = self.service._decode_sql(raw)
+        document = self.service._parse_sql_document("01_MV_SALES_DETAIL.sql", content)
+
+        self.assertEqual(document.parser, "sqlglot_ast")
+        self.assertTrue(document.columns, "物化视图应提取到字段列表")
+        self.assertIn("so_squaredetail", document.tables)
+        self.assertIn("bd_invbasdoc", document.tables)
+        self.assertTrue(
+            any("MATERIALIZED VIEW" in note for note in document.import_notes),
+            "应记录物化视图 DDL 剥离提示",
+        )
+
+    def test_all_materialized_view_files_parse_successfully(self) -> None:
+        view_files = sorted(SQL_VIEW_DIR.glob("*.sql"))
+        self.assertTrue(view_files, "视图SQL 目录应包含 .sql 文件")
+
+        for view_file in view_files:
+            raw = view_file.read_bytes()
+            content = self.service._decode_sql(raw)
+            document = self.service._parse_sql_document(view_file.name, content)
+
+            self.assertEqual(
+                document.parser,
+                "sqlglot_ast",
+                f"{view_file.name} 应走 AST 解析而非 regex 回退",
+            )
+            self.assertTrue(document.columns, f"{view_file.name} 应提取到字段")
+            self.assertTrue(document.tables, f"{view_file.name} 应提取到表名")
 
     def test_documents_with_high_unresolved_ratio_should_be_excluded(self) -> None:
         document = ParsedSqlDocument(

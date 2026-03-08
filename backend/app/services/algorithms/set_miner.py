@@ -62,35 +62,37 @@ class SetMinerService:
         total_granted = sum(
             len(unit["item_ids"]) * len(unit["covered_entity_ids"]) for unit in selected_units
         )
-        covered = sum(
-            len(unit["item_ids"]) * len(unit["covered_entity_ids"]) for unit in selected_units
-        )
         redundancy = max(total_granted - total_required, 0)
 
         item_term = "权限" if dataset.scene == "erp" else "字段"
 
-        summary = [
-            SummaryMetric(
-                label="推荐组合数",
-                value=str(len(sql_unit_groups) if dataset.scene == "sql" and sql_unit_groups else len(selected_units)),
-                hint="ERP 对应角色数，SQL 对应宽表数。",
-            ),
-            SummaryMetric(
-                label="覆盖实体数",
-                value=str(n_entities),
-                hint="本次参与分析的用户、SQL 或报表数量。",
-            ),
-            SummaryMetric(
-                label="需求覆盖率",
-                value="100%",
-                hint="当前 MVP 以完全覆盖输入需求为目标。",
-            ),
-            SummaryMetric(
-                label=f"冗余{item_term}数",
-                value=str(redundancy),
-                hint=f"由共享组合带来的附加{item_term}数量。",
-            ),
-        ]
+        if dataset.scene == "sql" and sql_unit_groups:
+            summary = self._build_sql_summary_metrics(
+                matrix, n_entities, total_required, redundancy, selected_units, sql_unit_groups,
+            )
+        else:
+            summary = [
+                SummaryMetric(
+                    label="推荐组合数",
+                    value=str(len(selected_units)),
+                    hint="ERP 对应角色数。",
+                ),
+                SummaryMetric(
+                    label="覆盖实体数",
+                    value=str(n_entities),
+                    hint="本次参与分析的用户数量。",
+                ),
+                SummaryMetric(
+                    label="需求覆盖率",
+                    value="100%",
+                    hint="当前以完全覆盖输入需求为目标。",
+                ),
+                SummaryMetric(
+                    label=f"冗余{item_term}数",
+                    value=str(redundancy),
+                    hint=f"由共享组合带来的附加{item_term}数量。",
+                ),
+            ]
 
         scene_title = "ERP 推荐角色方案" if dataset.scene == "erp" else "SQL 推荐宽表方案"
         unit_type = "角色" if dataset.scene == "erp" else "宽表"
@@ -538,6 +540,84 @@ class SetMinerService:
             base_field_min_hits=unit.get("base_field_min_hits"),
             suggested_field_min_hits=unit.get("suggested_field_min_hits"),
         )
+
+    @staticmethod
+    def _build_sql_summary_metrics(
+        matrix: np.ndarray,
+        n_entities: int,
+        total_required: int,
+        redundancy: int,
+        selected_units: list[dict],
+        sql_unit_groups: list[dict],
+    ) -> list[SummaryMetric]:
+        base_covered: set[tuple[int, int]] = set()
+        n_base = 0
+        n_extension = 0
+        n_standalone = 0
+        for group in sql_unit_groups:
+            base = group["base_unit"]
+            level = base.get("unit_level", "standalone")
+            if level == "base":
+                n_base += 1
+                for ei in base["entity_indices"]:
+                    for ii in base["item_indices"]:
+                        if matrix[ei, ii] == 1:
+                            base_covered.add((ei, ii))
+            elif level == "standalone":
+                n_standalone += 1
+            n_extension += len(group["units"])
+
+        base_coverage_pct = round(len(base_covered) / max(total_required, 1) * 100)
+
+        effective_count = sum(
+            1 for unit in selected_units if len(unit.get("covered_entity_ids", [])) >= 2
+        )
+
+        col_usage = (matrix > 0).sum(axis=0)
+        used_items = int((col_usage >= 1).sum())
+        standalone_items = int((col_usage == 1).sum())
+        standalone_pct = round(standalone_items / max(used_items, 1) * 100)
+
+        total_units = n_base + n_extension + n_standalone
+        composition = f"基础 {n_base} + 扩展 {n_extension} + 独立 {n_standalone}"
+
+        return [
+            SummaryMetric(
+                label="推荐宽表数",
+                value=str(total_units),
+                hint=composition,
+            ),
+            SummaryMetric(
+                label="覆盖 SQL 数",
+                value=str(n_entities),
+                hint="本次参与分析的 SQL 文件数量。",
+            ),
+            SummaryMetric(
+                label="基础宽表覆盖率",
+                value=f"{base_coverage_pct}%",
+                hint=(
+                    f"仅靠 {n_base} 张基础宽表即可覆盖 {base_coverage_pct}% 的字段需求，"
+                    + ("复用价值高，扩展宽表仅作补充。" if base_coverage_pct >= 60
+                       else "覆盖率偏低，仍需扩展或独立宽表补充剩余需求。" if base_coverage_pct >= 30
+                       else "覆盖率较低，业务 SQL 间共性不足，建议检查 SQL 是否可进一步规范化。")
+                ),
+            ),
+            SummaryMetric(
+                label="有效宽表数",
+                value=f"{effective_count}/{total_units}",
+                hint="覆盖 ≥ 2 个 SQL 的宽表，覆盖越多复用价值越高。",
+            ),
+            SummaryMetric(
+                label="独立需求占比",
+                value=f"{standalone_pct}%",
+                hint=f"{standalone_items}/{used_items} 个字段仅被 1 个 SQL 使用，共性较低。",
+            ),
+            SummaryMetric(
+                label="冗余字段数",
+                value=str(redundancy),
+                hint="由共享组合带来的附加字段数量。",
+            ),
+        ]
 
     def _build_sql_unit_groups(
         self,

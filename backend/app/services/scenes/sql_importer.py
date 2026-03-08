@@ -179,6 +179,20 @@ class SqlImportService:
             notes.append("检测到全角括号或标点，已自动标准化。")
         sql = normalized_sql
 
+        # 4. DDL 包装语句剥离：CREATE [OR REPLACE] [MATERIALIZED] VIEW ... AS SELECT → 纯 SELECT
+        #    覆盖 StarRocks / Doris / MySQL 等物化视图与普通视图的 DDL 前缀
+        ddl_view_pattern = re.compile(
+            r"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:MATERIALIZED\s+)?VIEW\s+"
+            r"(?:IF\s+NOT\s+EXISTS\s+)?"
+            r".*?"
+            r"\bAS\b\s*(?=\bSELECT\b)",
+            re.I | re.S,
+        )
+        replaced_sql = ddl_view_pattern.sub("", sql)
+        if replaced_sql != sql:
+            notes.append("检测到 CREATE VIEW / MATERIALIZED VIEW 语句，已自动提取内部 SELECT 查询。")
+        sql = replaced_sql
+
         return sql, notes
 
     def _parse_sql_document(self, filename: str, content: str) -> ParsedSqlDocument:
