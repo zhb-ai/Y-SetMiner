@@ -415,6 +415,7 @@ class SqlImportService:
                 continue
             left_source = from_expr.this
             left_table = self._resolve_table_name(left_source, cte_map)
+            alias_map = self._build_alias_map(select_expr, cte_map)
 
             for join in select_expr.args.get("joins", []):
                 right_source = join.this
@@ -424,23 +425,30 @@ class SqlImportService:
                 using_expr = join.args.get("using")
 
                 if on_expr:
-                    alias_map = self._build_alias_map(select_expr, cte_map)
                     for eq in on_expr.find_all(exp.EQ):
-                        left_col = self._extract_col_from_eq_side(eq.left)
-                        right_col = self._extract_col_from_eq_side(eq.right)
+                        left_tables, left_col = self._resolve_eq_side_tables(
+                            eq.left,
+                            alias_map,
+                            cte_map,
+                            select_expr,
+                        )
+                        right_tables, right_col = self._resolve_eq_side_tables(
+                            eq.right,
+                            alias_map,
+                            cte_map,
+                            select_expr,
+                        )
                         if left_col and right_col:
-                            l_tbl = eq.left.table if isinstance(eq.left, exp.Column) else ""
-                            r_tbl = eq.right.table if isinstance(eq.right, exp.Column) else ""
-                            l_real = self._alias_to_table(l_tbl, alias_map, cte_map)
-                            r_real = self._alias_to_table(r_tbl, alias_map, cte_map)
-                            if l_real and r_real and l_real != r_real:
-                                edges.append(JoinEdge(
-                                    left_table=l_real,
-                                    right_table=r_real,
-                                    left_col=left_col,
-                                    right_col=right_col,
-                                    sql_source=sql_source,
-                                ))
+                            for l_real in left_tables:
+                                for r_real in right_tables:
+                                    if l_real and r_real and l_real != r_real:
+                                        edges.append(JoinEdge(
+                                            left_table=l_real,
+                                            right_table=r_real,
+                                            left_col=left_col,
+                                            right_col=right_col,
+                                            sql_source=sql_source,
+                                        ))
 
                     if not right_table and left_table:
                         subquery_tables = self._resolve_table_names_deep(right_source, cte_map)
@@ -467,7 +475,109 @@ class SqlImportService:
                                 right_col=col_name,
                                 sql_source=sql_source,
                             ))
+
+            edges.extend(self._collect_correlated_subquery_edges(select_expr, alias_map, cte_map, sql_source))
         return edges
+
+    def _resolve_eq_side_tables(
+        self,
+        node: exp.Expression,
+        alias_map: dict[str, dict[str, object]],
+        cte_map: dict[str, exp.Expression],
+        scope_expression: exp.Select,
+    ) -> tuple[set[str], str]:
+        column_name = self._extract_col_from_eq_side(node)
+        if not column_name or not isinstance(node, exp.Column):
+            return set(), column_name
+        resolved = self._resolve_column(node, alias_map, cte_map, scope_expression=scope_expression)
+        return set(resolved["tables"]), column_name
+
+    def _collect_correlated_subquery_edges(
+        self,
+        outer_select: exp.Select,
+        outer_alias_map: dict[str, dict[str, object]],
+        cte_map: dict[str, exp.Expression],
+        sql_source: str,
+    ) -> list[JoinEdge]:
+        edges: list[JoinEdge] = []
+        for subquery in outer_select.find_all(exp.Subquery):
+            inner_select = subquery.this if isinstance(subquery.this, exp.Select) else subquery.find(exp.Select)
+            if inner_select is None:
+                continue
+
+            inner_alias_map = self._build_alias_map(inner_select, cte_map)
+            inner_base_tables = [
+                str(info["table"])
+                for info in inner_alias_map.values()
+                if info["type"] == "table"
+            ]
+            if len(set(inner_base_tables)) != 1:
+                continue
+            local_table = inner_base_tables[0]
+
+            where_expr = inner_select.args.get("where")
+            if where_expr is None:
+                continue
+
+            for eq in where_expr.find_all(exp.EQ):
+                left_col = self._extract_col_from_eq_side(eq.left)
+                right_col = self._extract_col_from_eq_side(eq.right)
+                if not left_col or not right_col:
+                    continue
+
+                local_side = self._infer_correlated_local_side(eq.left, eq.right, left_col, right_col, local_table)
+                if local_side == "left":
+                    outer_tables = self._resolve_eq_side_tables(eq.right, outer_alias_map, cte_map, outer_select)[0]
+                    for outer_table in outer_tables:
+                        if outer_table != local_table:
+                            edges.append(
+                                JoinEdge(
+                                    left_table=local_table,
+                                    right_table=outer_table,
+                                    left_col=left_col,
+                                    right_col=right_col,
+                                    sql_source=sql_source,
+                                )
+                            )
+                elif local_side == "right":
+                    outer_tables = self._resolve_eq_side_tables(eq.left, outer_alias_map, cte_map, outer_select)[0]
+                    for outer_table in outer_tables:
+                        if outer_table != local_table:
+                            edges.append(
+                                JoinEdge(
+                                    left_table=local_table,
+                                    right_table=outer_table,
+                                    left_col=right_col,
+                                    right_col=left_col,
+                                    sql_source=sql_source,
+                                )
+                            )
+        return edges
+
+    def _infer_correlated_local_side(
+        self,
+        left: exp.Expression,
+        right: exp.Expression,
+        left_col: str,
+        right_col: str,
+        local_table: str,
+    ) -> str:
+        left_table = self._normalize_identifier(left.table) if isinstance(left, exp.Column) else ""
+        right_table = self._normalize_identifier(right.table) if isinstance(right, exp.Column) else ""
+        if left_table and left_table == local_table:
+            return "left"
+        if right_table and right_table == local_table:
+            return "right"
+
+        if self._looks_like_key_column(left_col) and not self._looks_like_key_column(right_col):
+            return "left"
+        if self._looks_like_key_column(right_col) and not self._looks_like_key_column(left_col):
+            return "right"
+        return ""
+
+    def _looks_like_key_column(self, column_name: str) -> bool:
+        lowered = self._normalize_identifier(column_name)
+        return lowered.startswith("pk_") or lowered.endswith(("_id", "_key", "_code"))
 
     def _resolve_table_name(self, source: exp.Expression | None, cte_map: dict[str, exp.Expression]) -> str:
         """从 FROM/JOIN 的 source 节点解析出真实表名（跳过 CTE 和子查询）。"""
@@ -708,8 +818,20 @@ class SqlImportService:
 
         lineage_tables: set[str] = set()
         lineage_columns: set[str] = set()
+        nested_subquery_column_ids: set[int] = set()
+
+        # 对标量子查询优先按其内部 SELECT 的输出来源解析，避免把外层 JOIN 别名
+        # 误当成子查询里的真实来源表（例如 gm / so 这类外层别名污染）。
+        for subquery in projection.find_all(exp.Subquery):
+            resolved_subquery = self._resolve_scalar_subquery_sources(subquery, cte_map)
+            lineage_tables.update(resolved_subquery["tables"])
+            lineage_columns.update(resolved_subquery["columns"])
+            for nested_column in subquery.find_all(exp.Column):
+                nested_subquery_column_ids.add(id(nested_column))
 
         for column in projection.find_all(exp.Column):
+            if id(column) in nested_subquery_column_ids:
+                continue
             resolved = self._resolve_column(column, alias_map, cte_map, scope_expression=scope_expression)
             lineage_tables.update(resolved["tables"])
             lineage_columns.update(resolved["columns"])
@@ -729,6 +851,25 @@ class SqlImportService:
             source_columns=sorted(lineage_columns),
             original_expr=original_expr,
         )
+
+    def _resolve_scalar_subquery_sources(
+        self,
+        subquery: exp.Subquery,
+        cte_map: dict[str, exp.Expression],
+    ) -> dict[str, set[str]]:
+        select_expr = subquery.this if isinstance(subquery.this, exp.Select) else subquery.find(exp.Select)
+        if select_expr is None:
+            return {"tables": set(), "columns": set()}
+
+        nested_alias_map = self._build_alias_map(select_expr, cte_map)
+        lineage_tables: set[str] = set()
+        lineage_columns: set[str] = set()
+        for inner_projection in select_expr.expressions:
+            resolved = self._resolve_projection(inner_projection, nested_alias_map, cte_map, select_expr)
+            lineage_tables.update(resolved.source_tables)
+            lineage_columns.update(resolved.source_columns)
+
+        return {"tables": lineage_tables, "columns": lineage_columns}
 
     def _resolve_column(
         self,

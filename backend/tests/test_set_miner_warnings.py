@@ -22,6 +22,11 @@ class SetMinerWarningTests(unittest.TestCase):
         content = self.import_service._decode_sql(raw)
         return self.import_service._parse_sql_document(file_name, content)
 
+    def _solve_cases(self, file_names: list[str]):
+        documents = [self._parse_case(file_name) for file_name in file_names]
+        dataset = self.import_service._build_dataset(documents, import_warnings=[])
+        return self.set_miner.solve(dataset)
+
     def _build_warning_dataset(
         self,
         join_graph: dict[str, dict[str, list]],
@@ -180,6 +185,16 @@ class SetMinerWarningTests(unittest.TestCase):
         self.assertIn("表达式字段 排名", warnings[0])
         self.assertIn("NC仓库出货表.sql", warnings[0])
         self.assertIn("不会参与 JOIN 孤立判断", warnings[0])
+
+    def test_payable_cases_do_not_report_gm_as_isolated_table(self) -> None:
+        result = self._solve_cases(
+            ["供应商预付明细.sql", "应付-数据底表.sql", "应付预提.sql", "原装-供应商预提.sql"]
+        )
+
+        self.assertFalse(
+            any("['gm'] 在 JOIN 图中孤立" in warning for warning in result.warnings),
+            "gm 是外层 JOIN 别名，不应被当作真实孤立表出现在最终告警中",
+        )
 
 
 if __name__ == "__main__":
