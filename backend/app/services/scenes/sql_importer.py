@@ -476,8 +476,50 @@ class SqlImportService:
                                 sql_source=sql_source,
                             ))
 
+            edges.extend(self._collect_where_clause_join_edges(select_expr, alias_map, cte_map, sql_source))
             edges.extend(self._collect_correlated_subquery_edges(select_expr, alias_map, cte_map, sql_source))
         return edges
+
+    def _collect_where_clause_join_edges(
+        self,
+        select_expr: exp.Select,
+        alias_map: dict[str, dict[str, object]],
+        cte_map: dict[str, exp.Expression],
+        sql_source: str,
+    ) -> list[JoinEdge]:
+        where_expr = select_expr.args.get("where")
+        if where_expr is None:
+            return []
+
+        edges: list[JoinEdge] = []
+        for eq in where_expr.find_all(exp.EQ):
+            if self._is_nested_inside_subquery(eq, select_expr):
+                continue
+            left_tables, left_col = self._resolve_eq_side_tables(eq.left, alias_map, cte_map, select_expr)
+            right_tables, right_col = self._resolve_eq_side_tables(eq.right, alias_map, cte_map, select_expr)
+            if not left_col or not right_col:
+                continue
+            for left_table in left_tables:
+                for right_table in right_tables:
+                    if left_table and right_table and left_table != right_table:
+                        edges.append(
+                            JoinEdge(
+                                left_table=left_table,
+                                right_table=right_table,
+                                left_col=left_col,
+                                right_col=right_col,
+                                sql_source=sql_source,
+                            )
+                        )
+        return edges
+
+    def _is_nested_inside_subquery(self, node: exp.Expression, scope_select: exp.Select) -> bool:
+        current = node.parent
+        while current is not None and current is not scope_select:
+            if isinstance(current, exp.Subquery):
+                return True
+            current = current.parent
+        return False
 
     def _resolve_eq_side_tables(
         self,
@@ -486,11 +528,18 @@ class SqlImportService:
         cte_map: dict[str, exp.Expression],
         scope_expression: exp.Select,
     ) -> tuple[set[str], str]:
-        column_name = self._extract_col_from_eq_side(node)
-        if not column_name or not isinstance(node, exp.Column):
+        table_alias, column_name = self._extract_column_ref(node)
+        if not column_name:
             return set(), column_name
-        resolved = self._resolve_column(node, alias_map, cte_map, scope_expression=scope_expression)
-        return set(resolved["tables"]), column_name
+
+        if isinstance(node, exp.Column):
+            resolved = self._resolve_column(node, alias_map, cte_map, scope_expression=scope_expression)
+            return set(resolved["tables"]), column_name
+
+        if table_alias:
+            return self._resolve_table_alias_to_sources(table_alias, alias_map, cte_map), column_name
+
+        return set(), column_name
 
     def _collect_correlated_subquery_edges(
         self,
@@ -607,9 +656,44 @@ class SqlImportService:
 
     def _extract_col_from_eq_side(self, node: exp.Expression) -> str:
         """从等值条件的一侧提取列名（支持 table.col 和裸 col）。"""
+        return self._extract_column_ref(node)[1]
+
+    def _extract_column_ref(self, node: exp.Expression) -> tuple[str, str]:
         if isinstance(node, exp.Column):
-            return node.name
-        return ""
+            return self._normalize_identifier(node.table), node.name
+
+        # Oracle 老式外连接 `table.col(+)` 经过 sqlglot 解析后可能变成 Dot:
+        # `bd_stordoc.pk_stordoc()`
+        if isinstance(node, exp.Dot):
+            table_alias = self._normalize_identifier(node.this.sql() if node.this is not None else "")
+            expr = node.expression
+            if isinstance(expr, exp.Anonymous):
+                return table_alias, self._normalize_identifier(expr.name)
+            if isinstance(expr, exp.Identifier):
+                return table_alias, self._normalize_identifier(expr.this)
+
+        return "", ""
+
+    def _resolve_table_alias_to_sources(
+        self,
+        table_alias: str,
+        alias_map: dict[str, dict[str, object]],
+        cte_map: dict[str, exp.Expression],
+    ) -> set[str]:
+        if not table_alias:
+            return set()
+
+        normalized_alias = self._normalize_identifier(table_alias)
+        info = alias_map.get(normalized_alias)
+        if info is None:
+            return {normalized_alias}
+        if info["type"] == "table":
+            return {self._normalize_identifier(str(info["table"]))}
+        if info["type"] in {"cte", "subquery"}:
+            nested_sources = self._resolve_all_sources_from_nested_query(info["expression"], cte_map)
+            if nested_sources:
+                return nested_sources
+        return set()
 
     def _alias_to_table(
         self,
@@ -1064,6 +1148,22 @@ class SqlImportService:
                     "columns": set(resolved.source_columns or [requested_name]),
                 }
 
+        aliased_star_candidates: list[dict[str, set[str]]] = []
+        for projection in select_expr.expressions:
+            if not (isinstance(projection, exp.Column) and projection.name == "*" and projection.table):
+                continue
+            star_sources = self._resolve_table_alias_to_sources(projection.table, nested_alias_map, cte_map)
+            if star_sources:
+                aliased_star_candidates.append(
+                    {
+                        "tables": star_sources,
+                        "columns": {f"{table}.{requested_name}" for table in star_sources},
+                    }
+                )
+        unique_star_tables = {tuple(sorted(candidate["tables"])) for candidate in aliased_star_candidates}
+        if len(unique_star_tables) == 1 and aliased_star_candidates:
+            return aliased_star_candidates[0]
+
         # 处理 SELECT ma.*, extra_col ... FROM base ma 这类“星号透传”场景：
         # 若当前层未显式投影 requested_name，但存在 table.* / *，则继续回落到唯一来源。
         has_star_projection = any(
@@ -1094,6 +1194,22 @@ class SqlImportService:
                 )
 
         return {"tables": set(), "columns": {requested_name}}
+
+    def _resolve_all_sources_from_nested_query(
+        self,
+        nested_expression: exp.Expression,
+        cte_map: dict[str, exp.Expression],
+    ) -> set[str]:
+        select_expr = nested_expression if isinstance(nested_expression, exp.Select) else nested_expression.find(exp.Select)
+        if select_expr is None:
+            return set()
+
+        nested_alias_map = self._build_alias_map(select_expr, cte_map)
+        tables: set[str] = set()
+        for projection in select_expr.expressions:
+            resolved = self._resolve_projection(projection, nested_alias_map, cte_map, select_expr)
+            tables.update(resolved.source_tables)
+        return tables
 
     def _get_document_exclusion_reason(self, document: ParsedSqlDocument) -> str | None:
         if not document.columns:

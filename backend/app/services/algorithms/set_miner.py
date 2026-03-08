@@ -1130,24 +1130,35 @@ class SetMinerService:
     ) -> list[str]:
         warnings: list[str] = []
         item_lookup = {item.id: item for item in dataset.items}
+        entity_name_by_id = {entity.id: entity.name for entity in dataset.entities}
+        entity_names_by_item_id = self._build_entity_names_by_item_id(dataset, entity_name_by_id)
 
         for unit in units:
             unit_name = str(unit["name"])
             item_ids: list[str] = list(unit["item_ids"])
             covered_sql_names: list[str] = list(unit.get("covered_entity_names", []))
 
-            unresolved_expr_fields = [
-                item_lookup[item_id].name
+            unresolved_item_ids = [
+                item_id
                 for item_id in item_ids
                 if item_id in item_lookup and self._is_unresolved_derived_item(item_lookup[item_id])
-            ][:5]
+            ]
+            unresolved_expr_fields = [item_lookup[item_id].name for item_id in unresolved_item_ids[:5]]
             if not unresolved_expr_fields:
                 continue
 
+            relevant_sql_names = sorted(
+                {
+                    entity_name
+                    for item_id in unresolved_item_ids
+                    for entity_name in entity_names_by_item_id.get(item_id, [])
+                    if entity_name
+                }
+            )
             field_hint = "、".join(unresolved_expr_fields)
             warnings.append(
                 f"⚠ 宽表 `{unit_name}` 中的表达式字段 {field_hint} 等未能解析出底层来源表。"
-                f"涉及 SQL：{self._format_sql_name_hint(covered_sql_names)}。"
+                f"涉及 SQL：{self._format_sql_name_hint(relevant_sql_names or covered_sql_names)}。"
                 "这类字段不会参与 JOIN 孤立判断，建议补充表前缀、显式别名或拆解子查询以完善血缘。"
             )
 
@@ -1199,6 +1210,19 @@ class SetMinerService:
 
     def _normalize_source_name(self, value: object) -> str:
         return str(value or "").strip().lower()
+
+    def _build_entity_names_by_item_id(
+        self,
+        dataset: SceneDataset,
+        entity_name_by_id: dict[str, str],
+    ) -> dict[str, set[str]]:
+        entity_names_by_item_id: dict[str, set[str]] = {}
+        for relation in dataset.relations:
+            entity_name = entity_name_by_id.get(relation.entity_id, "")
+            if not entity_name:
+                continue
+            entity_names_by_item_id.setdefault(relation.item_id, set()).add(entity_name)
+        return entity_names_by_item_id
 
     def _find_connected_components(
         self,
