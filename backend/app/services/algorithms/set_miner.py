@@ -26,6 +26,7 @@ from app.services.algorithms.sql_unit_hierarchy import (
     _build_item_source_detail,
     mine_sql_base_candidates,
     _build_item_source_label,
+    _split_item_meta_list,
 )
 from app.services.scenes.erp_importer import CurrentRoleState
 from app.services.scenes.erp_role_diff import ErpRoleDiffService
@@ -1069,6 +1070,7 @@ class SetMinerService:
         if dataset.scene == "sql":
             warnings.extend(dataset.meta.get("import_warnings", []))
             warnings.extend(self._check_join_reachability(dataset, units))
+            warnings.extend(self._check_expression_source_completeness(dataset, units))
             warnings.extend(self._check_granularity_conflicts(dataset, units))
         return warnings
 
@@ -1095,61 +1097,140 @@ class SetMinerService:
         for unit in units:
             unit_name = str(unit["name"])
             item_ids: list[str] = list(unit["item_ids"])
+            covered_sql_names: list[str] = list(unit.get("covered_entity_names", []))
 
-            # 收集该宽表中所有字段的来源物理表
-            source_tables: set[str] = set()
-            for item_id in item_ids:
-                item = item_lookup.get(item_id)
-                if item and item.group and item.group != "unknown":
-                    source_tables.add(item.group)
+            source_tables = self._collect_unit_physical_sources(item_ids, item_lookup)
 
             if len(source_tables) <= 1:
-                continue  # 单表宽表，无需检查
+                continue
 
-            # BFS 连通性检查
             components = self._find_connected_components(source_tables, join_graph)
             if len(components) > 1:
                 isolated_tables = [t for comp in components[1:] for t in comp]
-                # 找到孤立表对应的字段
                 isolated_fields = [
                     item_lookup[iid].name
                     for iid in item_ids
-                    if item_lookup.get(iid) and item_lookup[iid].group in isolated_tables
+                    if item_lookup.get(iid) and self._item_touches_tables(item_lookup[iid], set(isolated_tables))
                 ][:5]
                 field_hint = "、".join(isolated_fields) if isolated_fields else "（字段未知）"
                 warnings.append(
                     f"⚠ 宽表 `{unit_name}` 来源表 {sorted(source_tables)} 中，"
                     f"{isolated_tables} 在 JOIN 图中孤立，"
                     f"字段 {field_hint} 等无法通过已知 JOIN 条件与主表关联。"
+                    f"涉及 SQL：{self._format_sql_name_hint(covered_sql_names)}。"
                     f"建议检查是否缺少 JOIN 条件或添加桥接表。"
                 )
 
         return warnings
+
+    def _check_expression_source_completeness(
+        self,
+        dataset: SceneDataset,
+        units: list[dict[str, object]],
+    ) -> list[str]:
+        warnings: list[str] = []
+        item_lookup = {item.id: item for item in dataset.items}
+
+        for unit in units:
+            unit_name = str(unit["name"])
+            item_ids: list[str] = list(unit["item_ids"])
+            covered_sql_names: list[str] = list(unit.get("covered_entity_names", []))
+
+            unresolved_expr_fields = [
+                item_lookup[item_id].name
+                for item_id in item_ids
+                if item_id in item_lookup and self._is_unresolved_derived_item(item_lookup[item_id])
+            ][:5]
+            if not unresolved_expr_fields:
+                continue
+
+            field_hint = "、".join(unresolved_expr_fields)
+            warnings.append(
+                f"⚠ 宽表 `{unit_name}` 中的表达式字段 {field_hint} 等未能解析出底层来源表。"
+                f"涉及 SQL：{self._format_sql_name_hint(covered_sql_names)}。"
+                "这类字段不会参与 JOIN 孤立判断，建议补充表前缀、显式别名或拆解子查询以完善血缘。"
+            )
+
+        return warnings
+
+    def _collect_unit_physical_sources(
+        self,
+        item_ids: list[str],
+        item_lookup: dict[str, object],
+    ) -> set[str]:
+        source_tables: set[str] = set()
+        for item_id in item_ids:
+            item = item_lookup.get(item_id)
+            if not item:
+                continue
+            source_tables.update(self._get_item_physical_sources(item))
+        return source_tables
+
+    def _get_item_physical_sources(self, item: object) -> set[str]:
+        direct_source = self._normalize_source_name(getattr(item, "group", None) or getattr(item, "source", None))
+        if direct_source and direct_source not in {"unknown", "derived"}:
+            return {direct_source}
+
+        meta = getattr(item, "meta", {}) or {}
+        meta_sources = {
+            source_name
+            for source_name in (
+                self._normalize_source_name(part)
+                for part in _split_item_meta_list(meta.get("source_tables", ""))
+            )
+            if source_name and source_name not in {"unknown", "derived"}
+        }
+        return meta_sources
+
+    def _item_touches_tables(self, item: object, tables: set[str]) -> bool:
+        return bool(self._get_item_physical_sources(item) & tables)
+
+    def _is_unresolved_derived_item(self, item: object) -> bool:
+        source_name = self._normalize_source_name(getattr(item, "group", None) or getattr(item, "source", None))
+        return source_name == "derived" and not self._get_item_physical_sources(item)
+
+    def _format_sql_name_hint(self, sql_names: list[str]) -> str:
+        if not sql_names:
+            return "（未知）"
+        sql_hint = "、".join(sql_names[:5])
+        if len(sql_names) > 5:
+            sql_hint += f" 等 {len(sql_names)} 个文件"
+        return sql_hint
+
+    def _normalize_source_name(self, value: object) -> str:
+        return str(value or "").strip().lower()
 
     def _find_connected_components(
         self,
         nodes: set[str],
         graph: dict[str, dict[str, list]],
     ) -> list[list[str]]:
-        """BFS 找出节点集合在图中的所有连通分量。"""
-        visited: set[str] = set()
+        """基于全局 JOIN 图找出来源表的连通分量，允许经过桥接表。"""
+        remaining = set(nodes)
         components: list[list[str]] = []
-        node_list = sorted(nodes)
-        for start in node_list:
-            if start in visited:
-                continue
-            component: list[str] = []
-            queue: deque[str] = deque([start])
-            visited.add(start)
-            while queue:
-                cur = queue.popleft()
-                component.append(cur)
-                for neighbor in graph.get(cur, {}):
-                    if neighbor in nodes and neighbor not in visited:
-                        visited.add(neighbor)
-                        queue.append(neighbor)
-            components.append(component)
+        while remaining:
+            start = min(remaining)
+            reachable = self._find_reachable_tables(start, graph)
+            component = sorted(node for node in remaining if node in reachable)
+            components.append(component or [start])
+            remaining -= set(component or [start])
+        components.sort(key=lambda component: (-len(component), component))
         return components
+
+    def _find_reachable_tables(
+        self,
+        start: str,
+        graph: dict[str, dict[str, list]],
+    ) -> set[str]:
+        visited: set[str] = {start}
+        queue: deque[str] = deque([start])
+        while queue:
+            current = queue.popleft()
+            for neighbor in graph.get(current, {}):
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append(neighbor)
+        return visited
 
     # ─── 粒度冲突检查 ───────────────────────────────────────────────────
 

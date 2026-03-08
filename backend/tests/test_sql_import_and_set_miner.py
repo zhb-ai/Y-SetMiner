@@ -176,6 +176,24 @@ class SqlImportServiceTests(unittest.TestCase):
         self.assertIn("参与列: gl.nabprice, gl.noutmny, gl.noutnum, oh.nonhandnum", detail)
         self.assertIn("原始表达式:", detail)
 
+    def test_subquery_join_tables_appear_in_join_graph(self) -> None:
+        sql = """
+        SELECT oh.id, gl.amount
+        FROM ic_onhandnum oh
+        LEFT JOIN (
+            SELECT gl1.* FROM ia_generalledger gl1
+            WHERE gl1.dr = 0
+        ) gl ON oh.pk = gl.cinventoryid
+        """
+        document = self.service._parse_sql_document("subquery_join.sql", sql)
+        dataset = self.service._build_dataset([document], import_warnings=[])
+        join_graph = dataset.meta.get("join_graph", {})
+
+        ia_neighbours = set(join_graph.get("ia_generalledger", {}).keys())
+        ic_neighbours = set(join_graph.get("ic_onhandnum", {}).keys())
+        self.assertIn("ia_generalledger", ic_neighbours | ia_neighbours,
+                       "子查询内的 ia_generalledger 应通过穿透出现在 JOIN 图中")
+
     def test_fullwidth_parenthesis_sql_no_longer_produces_weird_sources(self) -> None:
         document = self._parse_case("兼容新备货-分仓.sql")
 
@@ -692,9 +710,10 @@ class SqlSolveEndToEndTests(unittest.TestCase):
     def test_end_to_end_sql_solve_surfaces_join_risk_warning(self) -> None:
         result = self._solve_cases(["采购型号明细.sql"])
 
-        self.assertTrue(
-            any("JOIN 图中孤立" in warning for warning in result.warnings),
-            "复杂多来源 SQL 应在最终结果中暴露 JOIN 可达性风险",
+        # derived 不是物理表，不应触发 JOIN 孤立警告（之前是误报）
+        self.assertFalse(
+            any("'derived'" in warning and "JOIN 图中孤立" in warning for warning in result.warnings),
+            "derived 表达式字段不应被当做物理表参与 JOIN 连通性检查",
         )
         self.assertTrue(result.units)
         self.assertTrue(any(unit.sources for unit in result.units))

@@ -419,23 +419,18 @@ class SqlImportService:
             for join in select_expr.args.get("joins", []):
                 right_source = join.this
                 right_table = self._resolve_table_name(right_source, cte_map)
-                if not left_table or not right_table:
-                    continue
 
                 on_expr = join.args.get("on")
                 using_expr = join.args.get("using")
 
                 if on_expr:
-                    # 递归提取所有等值 EQ 条件
+                    alias_map = self._build_alias_map(select_expr, cte_map)
                     for eq in on_expr.find_all(exp.EQ):
                         left_col = self._extract_col_from_eq_side(eq.left)
                         right_col = self._extract_col_from_eq_side(eq.right)
                         if left_col and right_col:
-                            # 根据列的表限定符决定方向
                             l_tbl = eq.left.table if isinstance(eq.left, exp.Column) else ""
                             r_tbl = eq.right.table if isinstance(eq.right, exp.Column) else ""
-                            # 解析别名到真实表名
-                            alias_map = self._build_alias_map(select_expr, cte_map)
                             l_real = self._alias_to_table(l_tbl, alias_map, cte_map)
                             r_real = self._alias_to_table(r_tbl, alias_map, cte_map)
                             if l_real and r_real and l_real != r_real:
@@ -446,8 +441,22 @@ class SqlImportService:
                                     right_col=right_col,
                                     sql_source=sql_source,
                                 ))
+
+                    if not right_table and left_table:
+                        subquery_tables = self._resolve_table_names_deep(right_source, cte_map)
+                        for sub_table in subquery_tables:
+                            if sub_table != left_table:
+                                edges.append(JoinEdge(
+                                    left_table=left_table,
+                                    right_table=sub_table,
+                                    left_col="(subquery)",
+                                    right_col="(subquery)",
+                                    sql_source=sql_source,
+                                ))
+
                 elif using_expr:
-                    # USING(col) → left_table.col = right_table.col
+                    if not left_table or not right_table:
+                        continue
                     for col in using_expr.find_all(exp.Column):
                         col_name = col.name
                         if col_name and left_table and right_table:
@@ -469,6 +478,22 @@ class SqlImportService:
             if name and name not in cte_map:
                 return name
         return ""
+
+    def _resolve_table_names_deep(self, source: exp.Expression | None, cte_map: dict[str, exp.Expression]) -> list[str]:
+        """从 FROM/JOIN source 递归提取所有物理表名（穿透子查询）。"""
+        if source is None:
+            return []
+        if isinstance(source, exp.Table):
+            name = self._normalize_identifier(source.name)
+            if name and name not in cte_map:
+                return [name]
+            return []
+        tables: list[str] = []
+        for table in source.find_all(exp.Table):
+            name = self._normalize_identifier(table.name)
+            if name and name not in cte_map:
+                tables.append(name)
+        return list(dict.fromkeys(tables))
 
     def _extract_col_from_eq_side(self, node: exp.Expression) -> str:
         """从等值条件的一侧提取列名（支持 table.col 和裸 col）。"""
