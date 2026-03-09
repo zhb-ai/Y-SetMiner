@@ -43,6 +43,7 @@ class ParsedSqlDocument:
     columns: list[dict[str, str | None]]
     joins: list[str]
     parser: str
+    filter_columns: list[dict[str, str | None]] = field(default_factory=list)
     join_edges: list[JoinEdge] = field(default_factory=list)
     granularity_keys: list[str] = field(default_factory=list)  # GROUP BY 列，推断粒度键
     alias_to_table: dict[str, str] = field(default_factory=dict)  # {别名/短名 -> 真实物理表名}
@@ -281,6 +282,7 @@ class SqlImportService:
                 content=content,
                 tables=tables,
                 columns=columns,
+                filter_columns=self._extract_filter_columns_by_regex(normalized, alias_map),
                 joins=joins,
                 parser="regex_fallback",
                 import_notes=import_notes,
@@ -291,6 +293,7 @@ class SqlImportService:
         tables = sorted(self._collect_base_tables(expression, cte_map))
         joins = sorted(self._collect_join_tables(expression, cte_map))
         resolved_fields = self._collect_resolved_fields(expression, cte_map)
+        filter_fields = self._collect_filter_fields(expression, cte_map)
         join_edges = self._collect_join_edges(expression, cte_map, filename)
         granularity_keys = self._infer_granularity_keys(expression, cte_map)
         # 收集全文所有 SELECT 层的别名→真实表名映射
@@ -311,11 +314,23 @@ class SqlImportService:
             }
             for field in resolved_fields
         ]
+        filter_columns = [
+            {
+                "name": field.field_name,
+                "source_table": field.primary_source,
+                "column_name": ", ".join(field.source_columns) if field.source_columns else field.field_name,
+                "source_tables": ", ".join(field.source_tables),
+                "original_expr": field.original_expr,
+                "resolution_kind": field.resolution_kind or "filter_condition",
+            }
+            for field in filter_fields
+        ]
         return ParsedSqlDocument(
             name=filename,
             content=content,
             tables=tables,
             columns=columns,
+            filter_columns=filter_columns,
             joins=joins,
             parser="sqlglot_ast",
             join_edges=join_edges,
@@ -430,6 +445,73 @@ class SqlImportService:
         if current:
             parts.append("".join(current))
         return parts
+
+    def _extract_filter_columns_by_regex(
+        self,
+        sql: str,
+        alias_map: dict[str, str],
+    ) -> list[dict[str, str | None]]:
+        filter_columns: list[dict[str, str | None]] = []
+        seen: set[tuple[str, str | None]] = set()
+        clause_patterns = (
+            r"\bwhere\b(.*?)(?:\bgroup\s+by\b|\border\s+by\b|\bhaving\b|\bunion\b|$)",
+            r"\bhaving\b(.*?)(?:\border\s+by\b|\bunion\b|$)",
+        )
+        keywords = {
+            "and", "or", "not", "in", "is", "null", "like", "between", "exists", "select",
+            "from", "join", "on", "case", "when", "then", "else", "end", "sum", "count",
+            "avg", "min", "max", "to_date", "to_char", "to_number", "nvl", "coalesce",
+        }
+        base_tables = set(alias_map.values())
+
+        for pattern in clause_patterns:
+            clause_match = re.search(pattern, sql, flags=re.I | re.S)
+            if not clause_match:
+                continue
+
+            clause = clause_match.group(1)
+            for alias, column in re.findall(r"([A-Za-z_]\w*)\.([A-Za-z_]\w*)", clause):
+                normalized_alias = self._normalize_identifier(alias)
+                source_table = alias_map.get(normalized_alias, normalized_alias)
+                key = (column, source_table)
+                if key in seen:
+                    continue
+                seen.add(key)
+                filter_columns.append(
+                    {
+                        "name": column,
+                        "source_table": source_table,
+                        "column_name": f"{source_table}.{column}",
+                        "source_tables": source_table,
+                        "original_expr": f"{alias}.{column}",
+                        "resolution_kind": "filter_condition",
+                    }
+                )
+
+            if len(base_tables) != 1:
+                continue
+
+            source_table = next(iter(base_tables))
+            for column in re.findall(r"\b([A-Za-z_]\w*)\b", clause):
+                lowered = column.lower()
+                if lowered in keywords or column.isdigit():
+                    continue
+                key = (column, source_table)
+                if key in seen:
+                    continue
+                seen.add(key)
+                filter_columns.append(
+                    {
+                        "name": column,
+                        "source_table": source_table,
+                        "column_name": f"{source_table}.{column}",
+                        "source_tables": source_table,
+                        "original_expr": column,
+                        "resolution_kind": "filter_condition",
+                    }
+                )
+
+        return filter_columns
 
     def _build_cte_map(self, expression: exp.Expression) -> dict[str, exp.Expression]:
         cte_map: dict[str, exp.Expression] = {}
@@ -853,6 +935,52 @@ class SqlImportService:
             resolved_fields.append(field)
 
         return resolved_fields
+
+    def _collect_filter_fields(
+        self,
+        expression: exp.Expression,
+        cte_map: dict[str, exp.Expression],
+    ) -> list[ResolvedField]:
+        filter_fields: list[ResolvedField] = []
+        seen: set[tuple[str, tuple[str, ...], tuple[str, ...]]] = set()
+
+        for select_expr in expression.find_all(exp.Select):
+            alias_map = self._build_alias_map(select_expr, cte_map)
+            for clause_name in ("where", "having"):
+                clause_expr = select_expr.args.get(clause_name)
+                if clause_expr is None:
+                    continue
+
+                for column in clause_expr.find_all(exp.Column):
+                    if self._is_nested_inside_subquery(column, select_expr):
+                        continue
+
+                    resolved = self._resolve_column(column, alias_map, cte_map, scope_expression=select_expr)
+                    source_tables = sorted(resolved["tables"])
+                    source_columns = sorted(resolved["columns"])
+                    if len(source_tables) == 1:
+                        primary_source = source_tables[0]
+                    elif len(source_tables) > 1:
+                        primary_source = "derived"
+                    else:
+                        primary_source = None
+
+                    dedupe_key = (column.name, tuple(source_tables), tuple(source_columns))
+                    if dedupe_key in seen:
+                        continue
+                    seen.add(dedupe_key)
+                    filter_fields.append(
+                        ResolvedField(
+                            field_name=column.name,
+                            primary_source=primary_source,
+                            source_tables=source_tables,
+                            source_columns=source_columns or [column.sql(dialect="")],
+                            original_expr=column.sql(dialect=""),
+                            resolution_kind="filter_condition",
+                        )
+                    )
+
+        return filter_fields
 
     def _unwrap_star_select(
         self,
@@ -1394,6 +1522,7 @@ class SqlImportService:
         # 构建全局 JOIN 图（所有文件的 join_edges 合并）
         join_graph = self._build_join_graph(documents)
         lineage_merge_risk_warnings = self._build_lineage_merge_risk_warnings(documents)
+        document_filter_fields: dict[str, list[dict[str, str]]] = {}
 
         # 粒度信息：每个 SQL 文件的粒度键
         granularity_map = {
@@ -1401,6 +1530,27 @@ class SqlImportService:
             for doc in documents
             if doc.granularity_keys
         }
+        for document in documents:
+            normalized_filter_fields: list[dict[str, str]] = []
+            for column in document.filter_columns:
+                raw_source = self._normalize_source_name(column.get("source_table")) or "unknown"
+                real_source = self._normalize_source_name(
+                    document.alias_to_table.get(raw_source)
+                    or global_alias_to_table.get(raw_source)
+                    or raw_source
+                ) or "unknown"
+                normalized_source_tables = self._normalize_source_table_list(column.get("source_tables", ""))
+                normalized_filter_fields.append(
+                    {
+                        "name": str(column.get("name", "")),
+                        "source": real_source,
+                        "source_tables": ", ".join(normalized_source_tables),
+                        "column_name": str(column.get("column_name", "")),
+                        "original_expr": str(column.get("original_expr", "")),
+                        "resolution_kind": str(column.get("resolution_kind", "filter_condition")),
+                    }
+                )
+            document_filter_fields[document.name] = normalized_filter_fields
 
         return SceneDataset(
             scene="sql",
@@ -1421,6 +1571,7 @@ class SqlImportService:
                 "lineage_merge_risk_warnings": lineage_merge_risk_warnings,
                 "join_graph": join_graph,              # {table: {neighbor: [edge_info, ...]}}
                 "granularity_map": granularity_map,    # {sql_name: [key_cols]}
+                "document_filter_fields": document_filter_fields,
                 "alias_to_table": global_alias_to_table,  # 供前端/图展示使用
                 "all_join_edges": [                    # 原始边列表，供连通性检查
                     {

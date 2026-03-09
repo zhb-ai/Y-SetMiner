@@ -66,6 +66,11 @@ export interface SolutionUnit {
   suggested_item_sources: string[]
   suggested_item_source_details: string[]
   suggested_item_hits: number[]
+  filter_item_names: string[]
+  filter_item_sources: string[]
+  filter_item_source_details: string[]
+  filter_item_hits: number[]
+  filter_item_support_count?: number | null
   support_unit_count?: number | null
   base_field_min_hits?: number | null
   suggested_field_min_hits?: number | null

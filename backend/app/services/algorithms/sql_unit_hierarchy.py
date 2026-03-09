@@ -180,6 +180,59 @@ def build_extension_delta(
     return extra_source_tables, extra_item_names, extra_item_sources, extra_item_source_details
 
 
+def build_filter_field_suggestions(
+    dataset: SceneDataset,
+    entity_names: list[str],
+    *,
+    allowed_sources: tuple[str, ...] | None = None,
+    excluded_fields: set[tuple[str, str]] | None = None,
+    min_hits: int = 1,
+) -> tuple[list[str], list[str], list[str], list[int], int]:
+    document_filter_fields = dataset.meta.get("document_filter_fields", {})
+    if not isinstance(document_filter_fields, dict):
+        return [], [], [], [], 0
+
+    source_filter = set(allowed_sources or ())
+    excluded = excluded_fields or set()
+    support_entities = sorted(set(entity_names))
+    counter: Counter[tuple[str, str, str]] = Counter()
+
+    for entity_name in support_entities:
+        raw_fields = document_filter_fields.get(entity_name, [])
+        if not isinstance(raw_fields, list):
+            continue
+        for raw_field in raw_fields:
+            if not isinstance(raw_field, dict):
+                continue
+
+            field_name = str(raw_field.get("name", "")).strip()
+            if not field_name:
+                continue
+            source_label = _build_field_record_source_label(raw_field)
+            if (field_name, source_label) in excluded:
+                continue
+            if source_filter and not _record_matches_sources(raw_field, source_filter):
+                continue
+
+            detail = _build_field_record_source_detail(raw_field)
+            signature = (field_name, source_label, detail)
+            counter[signature] += 1
+
+    selected = [
+        (signature, hits)
+        for signature, hits in counter.items()
+        if hits >= min_hits
+    ]
+    selected.sort(key=lambda item: (-item[1], item[0][0], item[0][1]))
+    return (
+        [signature[0] for signature, _ in selected],
+        [signature[1] for signature, _ in selected],
+        [signature[2] for signature, _ in selected],
+        [hits for _, hits in selected],
+        len(support_entities),
+    )
+
+
 def _build_subset_item_frequency(
     dataset: SceneDataset,
     support_units: list[dict[str, object]],
@@ -256,3 +309,39 @@ def _build_item_source_detail(dataset: SceneDataset, item_idx: int) -> str:
 
 def _split_item_meta_list(value: object) -> list[str]:
     return [part.strip() for part in str(value).split(",") if part.strip()]
+
+
+def _build_field_record_source_label(record: dict[str, object]) -> str:
+    source = str(record.get("source", "")).strip()
+    source_tables = _split_item_meta_list(record.get("source_tables", ""))
+    original_expr = str(record.get("original_expr", "")).strip()
+    if source == "derived":
+        if source_tables:
+            return f"表达式依赖({'+'.join(source_tables)})"
+        if original_expr:
+            return "表达式/常量"
+    return source or "unknown"
+
+
+def _build_field_record_source_detail(record: dict[str, object]) -> str:
+    source = str(record.get("source", "")).strip()
+    source_tables = _split_item_meta_list(record.get("source_tables", ""))
+    column_name = str(record.get("column_name", "")).strip()
+    original_expr = str(record.get("original_expr", "")).strip()
+
+    details: list[str] = []
+    if source_tables:
+        details.append(f"来源表: {', '.join(source_tables)}")
+    if column_name:
+        details.append(f"过滤列: {column_name}")
+    if source == "derived" and original_expr:
+        details.append(f"条件表达式: {original_expr}")
+    return "\n".join(details)
+
+
+def _record_matches_sources(record: dict[str, object], source_filter: set[str]) -> bool:
+    source = str(record.get("source", "")).strip()
+    if source in source_filter:
+        return True
+    source_tables = set(_split_item_meta_list(record.get("source_tables", "")))
+    return bool(source_tables & source_filter)

@@ -44,12 +44,16 @@ function SourceGroupedFields({
   sourceDetails,
   hits,
   supportCount,
+  tagContainerWidth,
+  tagMaxWidth,
 }: {
   names: string[]
   sources: string[]
   sourceDetails?: string[]
   hits?: number[]
   supportCount?: number | null
+  tagContainerWidth?: number
+  tagMaxWidth?: number
 }) {
   const groups = groupFieldsBySource(names, sources)
   if (groups.length === 0) {
@@ -97,7 +101,11 @@ function SourceGroupedFields({
               {source}
             </Tag>
             <div style={{ flex: 1, minWidth: 220 }}>
-              <TagsCell items={fieldItems} />
+              <TagsCell
+                items={fieldItems}
+                containerWidth={tagContainerWidth}
+                tagMaxWidth={tagMaxWidth}
+              />
               {depLines.length > 0 && (
                 <div style={{
                   marginTop: 4,
@@ -195,6 +203,24 @@ function buildExtensionColumns(): TableColumnsType<SolutionUnit> {
       ),
     },
     {
+      title: '常用过滤字段',
+      key: 'filter_items',
+      width: 320,
+      render: (_: unknown, record: SolutionUnit) => (
+        record.filter_item_names.length
+          ? (
+            <SourceGroupedFields
+              names={record.filter_item_names}
+              sources={record.filter_item_sources}
+              sourceDetails={record.filter_item_source_details}
+              hits={record.filter_item_hits}
+              supportCount={record.filter_item_support_count}
+            />
+          )
+          : <Text type="secondary">无</Text>
+      ),
+    },
+    {
       title: '覆盖对象',
       key: 'covered_entities',
       width: 280,
@@ -263,6 +289,34 @@ function BaseUnitSummary({ unit, extensionCount }: { unit: SolutionUnit; extensi
               sourceDetails={unit.suggested_item_source_details}
               hits={unit.suggested_item_hits}
               supportCount={unit.support_unit_count}
+              tagContainerWidth="100%"
+              tagMaxWidth={undefined}
+            />
+          )
+          : <Text type="secondary">无</Text>}
+      </Descriptions.Item>
+      <Descriptions.Item
+        label={(
+          <Space size={4}>
+            <span>常用过滤字段</span>
+            <Tooltip
+              title="这些字段主要出现在 WHERE / HAVING 等过滤条件中，当前未直接纳入基础字段。"
+            >
+              <InfoCircleOutlined style={{ fontSize: 12, color: '#8c8c8c', cursor: 'pointer' }} />
+            </Tooltip>
+          </Space>
+        )}
+      >
+        {unit.filter_item_names.length
+          ? (
+            <SourceGroupedFields
+              names={unit.filter_item_names}
+              sources={unit.filter_item_sources}
+              sourceDetails={unit.filter_item_source_details}
+              hits={unit.filter_item_hits}
+              supportCount={unit.filter_item_support_count}
+              tagContainerWidth="100%"
+              tagMaxWidth={undefined}
             />
           )
           : <Text type="secondary">无</Text>}

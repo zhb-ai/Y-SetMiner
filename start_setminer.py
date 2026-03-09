@@ -121,6 +121,8 @@ def _spawn(
         kwargs["stdout"] = subprocess.PIPE
         kwargs["stderr"] = subprocess.STDOUT
         kwargs["text"] = True
+        kwargs["encoding"] = "utf-8"
+        kwargs["errors"] = "replace"
         kwargs["bufsize"] = 1
     return subprocess.Popen(command, **kwargs)
 
@@ -133,8 +135,13 @@ def _stream_output(process: subprocess.Popen[str], prefix: str) -> None:
             line = raw_line.rstrip()
             if line:
                 print(f"[{prefix}] {line}")
+    except Exception as exc:
+        print(f"[{prefix}] 日志输出线程异常: {exc}")
     finally:
-        process.stdout.close()
+        try:
+            process.stdout.close()
+        except Exception:
+            pass
 
 
 def _terminate_process_tree(process: subprocess.Popen[str]) -> None:

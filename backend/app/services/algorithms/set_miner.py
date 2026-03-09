@@ -21,6 +21,7 @@ from app.services.graph.graph_builder import build_erp_graph, build_sql_graph
 from app.services.matrix.builder import build_matrix
 from app.services.algorithms.sql_unit_hierarchy import (
     build_extension_delta,
+    build_filter_field_suggestions,
     get_real_unit_source_counter,
     get_real_unit_sources,
     _build_item_source_detail,
@@ -500,6 +501,11 @@ class SetMinerService:
                     "suggested_item_sources": list(unit.get("suggested_item_sources", [])),
                     "suggested_item_source_details": list(unit.get("suggested_item_source_details", [])),
                     "suggested_item_hits": list(unit.get("suggested_item_hits", [])),
+                    "filter_item_names": list(unit.get("filter_item_names", [])),
+                    "filter_item_sources": list(unit.get("filter_item_sources", [])),
+                    "filter_item_source_details": list(unit.get("filter_item_source_details", [])),
+                    "filter_item_hits": list(unit.get("filter_item_hits", [])),
+                    "filter_item_support_count": unit.get("filter_item_support_count"),
                     "support_unit_count": unit.get("support_unit_count"),
                     "base_field_min_hits": unit.get("base_field_min_hits"),
                     "suggested_field_min_hits": unit.get("suggested_field_min_hits"),
@@ -544,10 +550,39 @@ class SetMinerService:
             suggested_item_sources=list(unit.get("suggested_item_sources", [])),
             suggested_item_source_details=list(unit.get("suggested_item_source_details", [])),
             suggested_item_hits=list(unit.get("suggested_item_hits", [])),
+            filter_item_names=list(unit.get("filter_item_names", [])),
+            filter_item_sources=list(unit.get("filter_item_sources", [])),
+            filter_item_source_details=list(unit.get("filter_item_source_details", [])),
+            filter_item_hits=list(unit.get("filter_item_hits", [])),
+            filter_item_support_count=unit.get("filter_item_support_count"),
             support_unit_count=unit.get("support_unit_count"),
             base_field_min_hits=unit.get("base_field_min_hits"),
             suggested_field_min_hits=unit.get("suggested_field_min_hits"),
         )
+
+    def _build_unit_filter_field_payload(
+        self,
+        dataset: SceneDataset,
+        entity_names: list[str],
+        *,
+        allowed_sources: tuple[str, ...] | None = None,
+        excluded_pairs: set[tuple[str, str]] | None = None,
+        min_hits: int = 1,
+    ) -> dict[str, object]:
+        names, sources, details, hits, support_count = build_filter_field_suggestions(
+            dataset,
+            entity_names,
+            allowed_sources=allowed_sources,
+            excluded_fields=excluded_pairs,
+            min_hits=min_hits,
+        )
+        return {
+            "filter_item_names": names,
+            "filter_item_sources": sources,
+            "filter_item_source_details": details,
+            "filter_item_hits": hits,
+            "filter_item_support_count": support_count if names else None,
+        }
 
     @staticmethod
     def _build_sql_summary_metrics(
@@ -654,13 +689,25 @@ class SetMinerService:
                     "extra_source_tables": [],
                     "extra_item_names": [],
                     "extra_item_sources": [],
+                    "extra_item_source_details": [],
                     "suggested_item_names": [],
                     "suggested_item_sources": [],
+                    "suggested_item_source_details": [],
                     "suggested_item_hits": [],
                     "support_unit_count": None,
                     "base_field_min_hits": None,
                     "suggested_field_min_hits": None,
                 }
+                updated.update(
+                    self._build_unit_filter_field_payload(
+                        dataset,
+                        list(updated["covered_entity_names"]),
+                        excluded_pairs={
+                            (str(name), str(source))
+                            for name, source in zip(updated["item_display_names"], updated["item_sources"])
+                        },
+                    )
+                )
                 standalone_units.append(updated)
                 standalone_groups.append(
                     {
@@ -696,6 +743,13 @@ class SetMinerService:
                 continue
 
             base_name = "+".join(candidate.source_subset)
+            support_entity_names = sorted(
+                {
+                    entity_name
+                    for member_id in member_ids
+                    for entity_name in decorated_by_id[member_id]["covered_entity_names"]
+                }
+            )
             base_unit_id = None
             base_unit = None
 
@@ -728,6 +782,18 @@ class SetMinerService:
                     "base_field_min_hits": candidate.base_field_min_hits,
                     "suggested_field_min_hits": candidate.suggested_field_min_hits,
                 }
+                updated.update(
+                    self._build_unit_filter_field_payload(
+                        dataset,
+                        support_entity_names,
+                        allowed_sources=candidate.source_subset,
+                        excluded_pairs={
+                            *[(str(name), str(source)) for name, source in zip(updated["item_display_names"], updated["item_sources"])],
+                            *[(str(name), str(source)) for name, source in zip(updated["suggested_item_names"], updated["suggested_item_sources"])],
+                        },
+                        min_hits=candidate.suggested_field_min_hits,
+                    )
+                )
                 updated["name"] = self._build_sql_unit_name(dataset, updated)
                 decorated_by_id[member_id] = updated
                 base_unit_id = member_id
@@ -769,6 +835,18 @@ class SetMinerService:
                     "suggested_field_min_hits": candidate.suggested_field_min_hits,
                 }
                 base_unit = self._decorate_units(dataset, matrix, [synthetic_base])[0]
+                base_unit.update(
+                    self._build_unit_filter_field_payload(
+                        dataset,
+                        support_entity_names,
+                        allowed_sources=candidate.source_subset,
+                        excluded_pairs={
+                            *[(str(name), str(source)) for name, source in zip(base_unit["item_display_names"], base_unit["item_sources"])],
+                            *[(str(name), str(source)) for name, source in zip(base_unit["suggested_item_names"], base_unit["suggested_item_sources"])],
+                        },
+                        min_hits=candidate.suggested_field_min_hits,
+                    )
+                )
                 base_unit_id = str(base_unit["id"])
 
             extension_units: list[dict[str, object]] = []
@@ -796,6 +874,16 @@ class SetMinerService:
                     "base_field_min_hits": None,
                     "suggested_field_min_hits": None,
                 }
+                updated.update(
+                    self._build_unit_filter_field_payload(
+                        dataset,
+                        list(updated["covered_entity_names"]),
+                        excluded_pairs={
+                            (str(name), str(source))
+                            for name, source in zip(updated["item_display_names"], updated["item_sources"])
+                        },
+                    )
+                )
                 updated["name"] = self._build_sql_unit_name(dataset, updated)
                 decorated_by_id[member_id] = updated
                 extension_units.append(updated)
@@ -837,6 +925,16 @@ class SetMinerService:
                 "base_field_min_hits": None,
                 "suggested_field_min_hits": None,
             }
+            standalone_unit.update(
+                self._build_unit_filter_field_payload(
+                    dataset,
+                    list(standalone_unit["covered_entity_names"]),
+                    excluded_pairs={
+                        (str(name), str(source))
+                        for name, source in zip(standalone_unit["item_display_names"], standalone_unit["item_sources"])
+                    },
+                )
+            )
             standalone_unit["name"] = self._build_sql_unit_name(dataset, standalone_unit)
             decorated_by_id[unit_id] = standalone_unit
             groups.append(

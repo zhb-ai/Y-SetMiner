@@ -17,6 +17,8 @@ interface TagItem {
 
 interface TagsCellProps {
   items: TagItem[]
+  containerWidth?: number | string
+  tagMaxWidth?: number | string
 }
 
 interface PlainTagsCellProps {
@@ -34,24 +36,31 @@ function ExprTooltipContent({ expr }: { expr: string }) {
   )
 }
 
-export function TagsCell({ items }: TagsCellProps) {
+export function TagsCell({
+  items,
+  containerWidth = 340,
+  tagMaxWidth = 160,
+}: TagsCellProps) {
   const [expanded, setExpanded] = useState(false)
   const visible = expanded ? items : items.slice(0, TAGS_COLLAPSED_MAX)
   const extra = items.length - TAGS_COLLAPSED_MAX
 
   return (
-    <div style={{ maxWidth: 340 }}>
+    <div style={{ maxWidth: containerWidth }}>
       {visible.map((item, idx) => {
         const hasExpr = !!item.expr
+        const resolvedTagMaxWidth = typeof tagMaxWidth === 'number'
+          ? (hasExpr ? Math.max(tagMaxWidth + 20, 180) : tagMaxWidth)
+          : tagMaxWidth
         const tag = (
           <Tag
             key={`${item.name}-${idx}`}
             color={hasExpr ? 'purple' : undefined}
             icon={hasExpr ? <CodeOutlined /> : undefined}
             style={{
-              maxWidth: hasExpr ? 180 : 160,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
+              maxWidth: resolvedTagMaxWidth,
+              overflow: resolvedTagMaxWidth ? 'hidden' : 'visible',
+              textOverflow: resolvedTagMaxWidth ? 'ellipsis' : 'clip',
               whiteSpace: 'nowrap',
               marginBottom: 2,
               display: 'inline-flex',

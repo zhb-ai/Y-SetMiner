@@ -124,6 +124,11 @@ class SolutionUnit(BaseModel):
     suggested_item_sources: list[str] = Field(default_factory=list)
     suggested_item_source_details: list[str] = Field(default_factory=list)
     suggested_item_hits: list[int] = Field(default_factory=list)
+    filter_item_names: list[str] = Field(default_factory=list)
+    filter_item_sources: list[str] = Field(default_factory=list)
+    filter_item_source_details: list[str] = Field(default_factory=list)
+    filter_item_hits: list[int] = Field(default_factory=list)
+    filter_item_support_count: int | None = None
     support_unit_count: int | None = None
     base_field_min_hits: int | None = None
     suggested_field_min_hits: int | None = None
