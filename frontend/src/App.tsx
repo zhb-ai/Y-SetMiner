@@ -17,7 +17,7 @@ import {
   Tooltip,
   Typography,
 } from 'antd'
-import { CheckCircleOutlined, InfoCircleOutlined, ReloadOutlined, SettingOutlined, UploadOutlined } from '@ant-design/icons'
+import { CheckCircleOutlined, InfoCircleOutlined, MenuFoldOutlined, MenuUnfoldOutlined, ReloadOutlined, SettingOutlined, UploadOutlined } from '@ant-design/icons'
 
 import './App.css'
 import { AssignmentsTable } from './components/AssignmentsTable'
@@ -241,6 +241,7 @@ function App() {
   // 按钮状态：idle = 未分析/已换文件，done = 分析完成
   const [analyzeStatus, setAnalyzeStatus] = useState<'idle' | 'done'>('idle')
   const [diffAnalyzeStatus, setDiffAnalyzeStatus] = useState<'idle' | 'done'>('idle')
+  const [siderCollapsed, setSiderCollapsed] = useState(false)
 
   const result = results[scene] ?? null
   const sqlThresholdOptions = useMemo(() => ({
@@ -399,12 +400,23 @@ function App() {
       <Card size="small" className="ctrl-card">
         <Space direction="vertical" size={8} style={{ width: '100%' }}>
           <div className="ctrl-card-title">
-            <Text strong>分析场景</Text>
-            {activeScene && (
-              <Tooltip title={activeScene.description}>
-                <InfoCircleOutlined style={{ color: '#8c8c8c', cursor: 'pointer' }} />
-              </Tooltip>
-            )}
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <Text strong>分析场景</Text>
+              {activeScene && (
+                <Tooltip title={activeScene.description}>
+                  <InfoCircleOutlined style={{ color: '#8c8c8c', cursor: 'pointer' }} />
+                </Tooltip>
+              )}
+            </span>
+            <Tooltip title="收起侧栏">
+              <Button
+                type="text"
+                size="small"
+                icon={<MenuFoldOutlined />}
+                onClick={() => setSiderCollapsed(true)}
+                style={{ color: '#8c8c8c' }}
+              />
+            </Tooltip>
           </div>
           <Radio.Group
             value={scene}
@@ -901,10 +913,28 @@ function App() {
         </div>
       </Layout.Header>
       <Layout>
-        <Layout.Sider width={300} className="app-sider" theme="light">
+        <Layout.Sider
+          width={300}
+          collapsedWidth={0}
+          collapsible
+          collapsed={siderCollapsed}
+          trigger={null}
+          className="app-sider"
+          theme="light"
+        >
           <div className="sider-scroll">{siderContent}</div>
         </Layout.Sider>
         <Layout.Content className="app-content">
+          {siderCollapsed && (
+            <Tooltip title="展开侧栏" placement="right">
+              <Button
+                type="text"
+                icon={<MenuUnfoldOutlined />}
+                onClick={() => setSiderCollapsed(false)}
+                className="sider-expand-btn"
+              />
+            </Tooltip>
+          )}
           {resultContent}
         </Layout.Content>
       </Layout>
