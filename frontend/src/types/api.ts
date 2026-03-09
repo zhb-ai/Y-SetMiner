@@ -23,6 +23,22 @@ export interface ImportPreviewResponse {
   sample_items: string[]
   detected_columns: Record<string, string>
   warnings: string[]
+  preprocess_summary?: {
+    detected_objects: Array<{
+      name: string
+      object_type: string
+      source_file: string
+    }>
+    expanded_documents: Array<{
+      file_name: string
+      expanded_objects: string[]
+      max_depth: number
+      is_definition_file: boolean
+      definition_object_name?: string | null
+      definition_object_type?: string | null
+    }>
+    cycles: string[][]
+  } | null
 }
 
 export interface SolutionUnit {

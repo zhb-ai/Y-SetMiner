@@ -46,8 +46,8 @@ const ERP_COLS_OPTIONAL = [
 
 const SQL_IMPORT_NOTES = [
   {
-    title: '不要直接上传视图定义文件',
-    detail: '如果 SQL 中引用了视图，请同时提供视图的原始 SQL，以便分析真正的底层原始表',
+    title: '请一并上传依赖对象定义',
+    detail: '如果 SQL 引用了视图、物化视图或宽表，请同时提供对应定义 SQL，系统会在预处理阶段尽量自动展开到底层查询',
   },
   {
     title: '禁止使用 SELECT *',
@@ -115,6 +115,112 @@ function WarningGroups({ warnings, emptyText }: { warnings: string[]; emptyText:
         </Card>
       ))}
     </Space>
+  )
+}
+
+function getSqlObjectTypeLabel(type?: string | null) {
+  if (type === 'view') return '视图'
+  if (type === 'materialized_view') return '物化视图'
+  if (type === 'wide_table') return '宽表'
+  return type || '对象'
+}
+
+function SqlPreprocessSummaryView({ preview }: { preview: ImportPreviewResponse }) {
+  const summary = preview.preprocess_summary
+  if (!summary) {
+    return null
+  }
+
+  const expandedDocs = summary.expanded_documents.filter((item) => item.expanded_objects.length > 0)
+  const definitionDocs = summary.expanded_documents.filter((item) => item.is_definition_file)
+
+  return (
+    <Card size="small" type="inner" title="对象展开预处理">
+      <Space direction="vertical" size={10} style={{ width: '100%' }}>
+        <Descriptions column={1} size="small">
+          <Descriptions.Item label="识别对象数">{summary.detected_objects.length}</Descriptions.Item>
+          <Descriptions.Item label="发生展开的 SQL 数">{expandedDocs.length}</Descriptions.Item>
+          <Descriptions.Item label="循环依赖">{summary.cycles.length}</Descriptions.Item>
+        </Descriptions>
+
+        {summary.detected_objects.length > 0 && (
+          <div>
+            <Text strong style={{ fontSize: 12 }}>识别到的可展开对象</Text>
+            <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {summary.detected_objects.map((item) => (
+                <Tooltip
+                  key={`${item.source_file}-${item.name}`}
+                  title={`${getSqlObjectTypeLabel(item.object_type)} · ${item.source_file}`}
+                >
+                  <Tag color={item.object_type === 'wide_table' ? 'orange' : item.object_type === 'materialized_view' ? 'purple' : 'blue'}>
+                    {item.name}
+                  </Tag>
+                </Tooltip>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {expandedDocs.length > 0 && (
+          <div>
+            <Text strong style={{ fontSize: 12 }}>各文件展开明细</Text>
+            <List
+              size="small"
+              style={{ marginTop: 6 }}
+              dataSource={expandedDocs}
+              renderItem={(item) => (
+                <List.Item style={{ padding: '8px 0' }}>
+                  <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                    <Text style={{ fontSize: 12 }}>
+                      <Text strong>{item.file_name}</Text>
+                      {' '}展开了 {item.expanded_objects.length} 个对象，最大 {item.max_depth} 层
+                    </Text>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      {item.expanded_objects.map((name) => (
+                        <Tag key={`${item.file_name}-${name}`}>{name}</Tag>
+                      ))}
+                    </div>
+                  </Space>
+                </List.Item>
+              )}
+            />
+          </div>
+        )}
+
+        {definitionDocs.length > 0 && (
+          <div>
+            <Text strong style={{ fontSize: 12 }}>对象定义文件</Text>
+            <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {definitionDocs.map((item) => (
+                <Tooltip
+                  key={`def-${item.file_name}`}
+                  title={`${item.file_name} · ${getSqlObjectTypeLabel(item.definition_object_type)}`}
+                >
+                  <Tag>{item.definition_object_name || item.file_name}</Tag>
+                </Tooltip>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {summary.cycles.length > 0 && (
+          <div>
+            <Text strong style={{ fontSize: 12 }}>循环依赖</Text>
+            <Space direction="vertical" size={6} style={{ width: '100%', marginTop: 6 }}>
+              {summary.cycles.map((cycle, index) => (
+                <Alert
+                  key={`cycle-${index}`}
+                  type="warning"
+                  showIcon
+                  message={<span style={{ fontSize: 12 }}>{cycle.join(' -> ')}</span>}
+                  style={{ padding: '4px 8px' }}
+                />
+              ))}
+            </Space>
+          </div>
+        )}
+      </Space>
+    </Card>
   )
 }
 
@@ -676,14 +782,17 @@ function App() {
               </Button>
             </Space>
             {preview && (
-              <Card size="small" type="inner" title="预校验结果">
-                <Descriptions column={1} size="small">
-                  <Descriptions.Item label="SQL 数">{preview.entity_count}</Descriptions.Item>
-                  <Descriptions.Item label="字段数">{preview.item_count}</Descriptions.Item>
-                  <Descriptions.Item label="引用关系">{preview.relation_count}</Descriptions.Item>
-                </Descriptions>
-                <WarningGroups warnings={preview.warnings} emptyText="文件结构良好" />
-              </Card>
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                <Card size="small" type="inner" title="预校验结果">
+                  <Descriptions column={1} size="small">
+                    <Descriptions.Item label="SQL 数">{preview.entity_count}</Descriptions.Item>
+                    <Descriptions.Item label="字段数">{preview.item_count}</Descriptions.Item>
+                    <Descriptions.Item label="引用关系">{preview.relation_count}</Descriptions.Item>
+                  </Descriptions>
+                  <WarningGroups warnings={preview.warnings} emptyText="文件结构良好" />
+                </Card>
+                <SqlPreprocessSummaryView preview={preview} />
+              </Space>
             )}
           </Space>
         </Card>

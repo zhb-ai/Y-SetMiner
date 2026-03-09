@@ -6,6 +6,8 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import uvicorn
@@ -101,13 +103,121 @@ def _validate_dev_environment() -> list[str]:
     return problems
 
 
-def _spawn(command: list[str], cwd: Path, new_console: bool) -> subprocess.Popen[str]:
+def _spawn(
+    command: list[str],
+    cwd: Path,
+    new_console: bool,
+    *,
+    env: dict[str, str] | None = None,
+    capture_output: bool = False,
+) -> subprocess.Popen[str]:
     kwargs: dict[str, object] = {
         "cwd": str(cwd),
+        "env": env or os.environ.copy(),
     }
     if os.name == "nt" and new_console:
         kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
+    if capture_output:
+        kwargs["stdout"] = subprocess.PIPE
+        kwargs["stderr"] = subprocess.STDOUT
+        kwargs["text"] = True
+        kwargs["bufsize"] = 1
     return subprocess.Popen(command, **kwargs)
+
+
+def _stream_output(process: subprocess.Popen[str], prefix: str) -> None:
+    if process.stdout is None:
+        return
+    try:
+        for raw_line in process.stdout:
+            line = raw_line.rstrip()
+            if line:
+                print(f"[{prefix}] {line}")
+    finally:
+        process.stdout.close()
+
+
+def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return
+
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+
+
+def _run_dev_mode_same_window(
+    backend_command: list[str],
+    frontend_command: list[str],
+    frontend_env: dict[str, str],
+) -> int:
+    print("正在以单窗口模式启动后端开发服务...")
+    backend_process = _spawn(
+        backend_command,
+        BACKEND_DIR,
+        new_console=False,
+        capture_output=True,
+    )
+    print(f"后端进程已启动，PID={backend_process.pid}")
+
+    print("正在以单窗口模式启动前端开发服务...")
+    frontend_process = _spawn(
+        frontend_command,
+        FRONTEND_DIR,
+        new_console=False,
+        env=frontend_env,
+        capture_output=True,
+    )
+    print(f"前端进程已启动，PID={frontend_process.pid}")
+    print("启动完成。按 Ctrl+C 可同时停止前后端服务。")
+
+    backend_thread = threading.Thread(
+        target=_stream_output,
+        args=(backend_process, "backend"),
+        daemon=True,
+    )
+    frontend_thread = threading.Thread(
+        target=_stream_output,
+        args=(frontend_process, "frontend"),
+        daemon=True,
+    )
+    backend_thread.start()
+    frontend_thread.start()
+
+    exit_code = 0
+    try:
+        while True:
+            backend_code = backend_process.poll()
+            frontend_code = frontend_process.poll()
+            if backend_code is not None or frontend_code is not None:
+                if backend_code not in (None, 0):
+                    print(f"后端开发服务已退出，退出码={backend_code}")
+                    exit_code = backend_code
+                if frontend_code not in (None, 0):
+                    print(f"前端开发服务已退出，退出码={frontend_code}")
+                    exit_code = frontend_code or exit_code
+                break
+            time.sleep(0.3)
+    except KeyboardInterrupt:
+        print("\n正在停止前后端开发服务...")
+    finally:
+        _terminate_process_tree(frontend_process)
+        _terminate_process_tree(backend_process)
+        backend_thread.join(timeout=2)
+        frontend_thread.join(timeout=2)
+        print("开发服务已停止。")
+
+    return exit_code
 
 
 def create_app() -> FastAPI:
@@ -184,6 +294,8 @@ def _run_dev_mode(args: argparse.Namespace) -> int:
     npm_executable = _resolve_npm()
     backend_command = _build_backend_command(args.host, args.backend_port)
     frontend_command = _build_frontend_command(npm_executable, args.host, args.frontend_port)
+    frontend_env = os.environ.copy()
+    frontend_env["VITE_API_PROXY_TARGET"] = f"http://{args.host}:{args.backend_port}"
 
     print("开发模式环境检查通过。")
     print(f"后端地址: http://{args.host}:{args.backend_port}")
@@ -193,12 +305,20 @@ def _run_dev_mode(args: argparse.Namespace) -> int:
         print("已完成检查，未启动服务。")
         return 0
 
+    if args.same_window:
+        return _run_dev_mode_same_window(backend_command, frontend_command, frontend_env)
+
     print("正在启动后端开发服务...")
     backend_process = _spawn(backend_command, BACKEND_DIR, new_console=not args.same_window)
     print(f"后端进程已启动，PID={backend_process.pid}")
 
     print("正在启动前端开发服务...")
-    frontend_process = _spawn(frontend_command, FRONTEND_DIR, new_console=not args.same_window)
+    frontend_process = _spawn(
+        frontend_command,
+        FRONTEND_DIR,
+        new_console=not args.same_window,
+        env=frontend_env,
+    )
     print(f"前端进程已启动，PID={frontend_process.pid}")
 
     print("启动完成。关闭对应终端窗口即可停止服务。")
@@ -226,9 +346,10 @@ def _run_serve_mode(args: argparse.Namespace) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="启动 SetMiner。支持开发模式和静态托管模式。")
     parser.add_argument("--mode", choices=["serve", "dev"], default="serve", help="serve=单端口托管前后端，dev=前后端分别启动开发服务")
+    parser.add_argument("--dev", action="store_true", help="开发模式快捷开关，等价于 --mode dev")
     parser.add_argument("--host", default="127.0.0.1", help="监听地址")
     parser.add_argument("--port", type=int, default=5000, help="serve 模式端口，支持 python -m start_setminer --port 5000")
-    parser.add_argument("--backend-port", type=int, default=8000, help="dev 模式后端端口")
+    parser.add_argument("--backend-port", type=int, default=18000, help="dev 模式后端端口")
     parser.add_argument("--frontend-port", type=int, default=5173, help="dev 模式前端端口")
     parser.add_argument("--reload", action="store_true", help="serve 模式启用 uvicorn reload")
     parser.add_argument("--check-only", action="store_true", help="仅检查环境，不实际启动服务。")
@@ -238,6 +359,9 @@ def main() -> int:
         help="dev 模式下不新开终端窗口，直接在当前会话中启动子进程。",
     )
     args = parser.parse_args()
+
+    if args.dev:
+        args.mode = "dev"
 
     if args.mode == "dev":
         return _run_dev_mode(args)

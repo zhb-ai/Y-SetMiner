@@ -9,7 +9,18 @@ from itertools import combinations
 from fastapi import HTTPException, UploadFile
 from sqlglot import exp, parse_one
 
-from app.schemas.solve import ConstraintConfig, Entity, ImportPreviewResponse, Item, Relation, SceneDataset
+from app.schemas.solve import (
+    ConstraintConfig,
+    Entity,
+    ImportPreviewResponse,
+    Item,
+    Relation,
+    SceneDataset,
+    SqlPreprocessDocumentSummary,
+    SqlPreprocessObjectSummary,
+    SqlPreprocessSummary,
+)
+from app.services.scenes.sql_object_preprocessor import SqlObjectPreprocessor
 
 SUPPORTED_SQL_SUFFIXES = (".sql", ".txt")
 
@@ -49,6 +60,9 @@ class ResolvedField:
 
 
 class SqlImportService:
+    def __init__(self) -> None:
+        self._object_preprocessor = SqlObjectPreprocessor()
+
     def _normalize_identifier(self, value: str | None) -> str:
         if value is None:
             return ""
@@ -65,7 +79,7 @@ class SqlImportService:
         base_field_threshold: float = 0.6,
         suggested_field_threshold: float = 0.45,
     ) -> ImportPreviewResponse:
-        documents, import_warnings = await self._parse_uploads(files)
+        documents, import_warnings, preprocess_summary = await self._parse_uploads(files)
         dataset = self._build_dataset(
             documents,
             import_warnings=import_warnings,
@@ -86,6 +100,7 @@ class SqlImportService:
                 "parser": ", ".join(sorted({document.parser for document in documents})),
             },
             warnings=warnings,
+            preprocess_summary=preprocess_summary,
         )
 
     async def solve_uploads(
@@ -95,7 +110,7 @@ class SqlImportService:
         base_field_threshold: float = 0.6,
         suggested_field_threshold: float = 0.45,
     ) -> SceneDataset:
-        documents, import_warnings = await self._parse_uploads(files)
+        documents, import_warnings, _ = await self._parse_uploads(files)
         return self._build_dataset(
             documents,
             import_warnings=import_warnings,
@@ -103,13 +118,17 @@ class SqlImportService:
             suggested_field_threshold=suggested_field_threshold,
         )
 
-    async def _parse_uploads(self, files: list[UploadFile]) -> tuple[list[ParsedSqlDocument], list[str]]:
+    async def _parse_uploads(
+        self,
+        files: list[UploadFile],
+    ) -> tuple[list[ParsedSqlDocument], list[str], SqlPreprocessSummary | None]:
         if not files:
             raise HTTPException(status_code=400, detail="请至少上传一个 .sql 或 .txt 文件。")
 
         documents: list[ParsedSqlDocument] = []
         parse_errors: list[str] = []
         import_warnings: list[str] = []
+        raw_documents: list[tuple[str, str]] = []
         for upload in files:
             filename = upload.filename or ""
             if not filename.lower().endswith(SUPPORTED_SQL_SUFFIXES):
@@ -117,6 +136,12 @@ class SqlImportService:
 
             raw = await upload.read()
             content = self._decode_sql(raw)
+            raw_documents.append((filename, content))
+
+        processed_documents, preprocess_notes, preprocess_summary = self._object_preprocessor.preprocess_documents(raw_documents)
+        import_warnings.extend(preprocess_notes)
+
+        for filename, content in processed_documents:
             try:
                 document = self._parse_sql_document(filename, content)
                 exclusion_reason = self._get_document_exclusion_reason(document)
@@ -137,7 +162,7 @@ class SqlImportService:
             elif import_warnings:
                 detail += " 导入结果：" + "；".join(import_warnings)
             raise HTTPException(status_code=400, detail=detail)
-        return documents, import_warnings
+        return documents, import_warnings, self._build_preprocess_summary(preprocess_summary)
 
     def _decode_sql(self, raw: bytes) -> str:
         for encoding in ("utf-8-sig", "utf-8", "gbk", "gb2312"):
@@ -146,6 +171,35 @@ class SqlImportService:
             except UnicodeDecodeError:
                 continue
         raise HTTPException(status_code=400, detail="SQL 文件编码无法识别，请保存为 UTF-8 或 GBK。")
+
+    def _build_preprocess_summary(self, summary: object) -> SqlPreprocessSummary | None:
+        if summary is None:
+            return None
+
+        detected_objects = [
+            SqlPreprocessObjectSummary(
+                name=item.name.lower(),
+                object_type=item.object_type,
+                source_file=item.source_file,
+            )
+            for item in summary.detected_objects
+        ]
+        expanded_documents = [
+            SqlPreprocessDocumentSummary(
+                file_name=item.file_name,
+                expanded_objects=item.expanded_objects,
+                max_depth=item.max_depth,
+                is_definition_file=item.is_definition_file,
+                definition_object_name=item.definition_object_name,
+                definition_object_type=item.definition_object_type,
+            )
+            for item in summary.expanded_documents
+        ]
+        return SqlPreprocessSummary(
+            detected_objects=detected_objects,
+            expanded_documents=expanded_documents,
+            cycles=summary.cycles,
+        )
 
     def _sanitize_vendor_sql(self, sql: str) -> tuple[str, list[str]]:
         """处理 ERP/BI 平台特有的非标准语法，使 sqlglot 和正则解析器能正常处理。
@@ -181,8 +235,7 @@ class SqlImportService:
             notes.append("检测到全角括号或标点，已自动标准化。")
         sql = normalized_sql
 
-        # 4. DDL 包装语句剥离：CREATE [OR REPLACE] [MATERIALIZED] VIEW ... AS SELECT → 纯 SELECT
-        #    覆盖 StarRocks / Doris / MySQL 等物化视图与普通视图的 DDL 前缀
+        # 4. DDL 包装语句剥离：CREATE VIEW / MATERIALIZED VIEW / CTAS → 纯 SELECT
         ddl_view_pattern = re.compile(
             r"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:MATERIALIZED\s+)?VIEW\s+"
             r"(?:IF\s+NOT\s+EXISTS\s+)?"
@@ -193,6 +246,18 @@ class SqlImportService:
         replaced_sql = ddl_view_pattern.sub("", sql)
         if replaced_sql != sql:
             notes.append("检测到 CREATE VIEW / MATERIALIZED VIEW 语句，已自动提取内部 SELECT 查询。")
+        sql = replaced_sql
+
+        ddl_ctas_pattern = re.compile(
+            r"^\s*CREATE\s+TABLE\s+"
+            r"(?:IF\s+NOT\s+EXISTS\s+)?"
+            r".*?"
+            r"\bAS\b\s*(?=\b(?:WITH|SELECT)\b)",
+            re.I | re.S,
+        )
+        replaced_sql = ddl_ctas_pattern.sub("", sql)
+        if replaced_sql != sql:
+            notes.append("检测到 CREATE TABLE AS SELECT 宽表脚本，已自动提取内部查询。")
         sql = replaced_sql
 
         return sql, notes

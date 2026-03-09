@@ -52,6 +52,27 @@ class SolveRequest(BaseModel):
     dataset: SceneDataset | None = None
 
 
+class SqlPreprocessObjectSummary(BaseModel):
+    name: str
+    object_type: str
+    source_file: str
+
+
+class SqlPreprocessDocumentSummary(BaseModel):
+    file_name: str
+    expanded_objects: list[str]
+    max_depth: int
+    is_definition_file: bool
+    definition_object_name: str | None = None
+    definition_object_type: str | None = None
+
+
+class SqlPreprocessSummary(BaseModel):
+    detected_objects: list[SqlPreprocessObjectSummary] = Field(default_factory=list)
+    expanded_documents: list[SqlPreprocessDocumentSummary] = Field(default_factory=list)
+    cycles: list[list[str]] = Field(default_factory=list)
+
+
 class ImportPreviewResponse(BaseModel):
     scene: SceneType
     entity_count: int
@@ -61,6 +82,7 @@ class ImportPreviewResponse(BaseModel):
     sample_items: list[str]
     detected_columns: dict[str, str]
     warnings: list[str]
+    preprocess_summary: SqlPreprocessSummary | None = None
 
 
 class SceneInfo(BaseModel):
