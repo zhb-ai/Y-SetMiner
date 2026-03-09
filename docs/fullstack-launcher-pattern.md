@@ -4,6 +4,39 @@
 
 ---
 
+## 命令中的 `start_app` 是什么
+
+`python -m start_app` 意思是"把 `start_app` 当作模块运行"，Python 会在当前目录找 `start_app.py` 并执行。所以 **`start_app` 就是你的启动脚本文件名（不含 `.py`）**，按项目自行命名即可：
+
+| 文件名 | 启动命令 |
+|--------|----------|
+| `start_setminer.py` | `python -m start_setminer --dev --same-window` |
+| `start_crm.py` | `python -m start_crm --dev --same-window` |
+| `start_app.py` | `python -m start_app --dev --same-window` |
+
+下文统一用 `start_app` 作为占位名。
+
+---
+
+## 命令速查
+```powershell
+# ── 开发（推荐）──
+python -m start_app --dev --same-window              # 单窗口合并日志
+python -m start_app --dev                             # Windows 各开新窗口
+python -m start_app --dev --same-window --backend-port 9000 --frontend-port 3000
+
+# ── 生产/演示 ──
+python -m start_app                                   # 默认 :5000
+python -m start_app --port 8080                       # 自定义端口
+python -m start_app --reload                          # 开启后端热重载
+uvicorn start_app:app --host 0.0.0.0 --port 5000     # 直接用 uvicorn
+
+# ── 环境检查 ──
+python -m start_app --check-only                      # 检查 serve 环境
+python -m start_app --dev --check-only                # 检查 dev 环境
+```
+
+
 ## 核心思路
 
 ```
