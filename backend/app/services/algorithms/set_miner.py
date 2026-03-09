@@ -29,6 +29,7 @@ from app.services.algorithms.sql_unit_hierarchy import (
     _build_item_source_label,
     _split_item_meta_list,
 )
+from app.services.algorithms.sql_unit_postprocessor import finalize_sql_unit_groups
 from app.services.scenes.erp_importer import CurrentRoleState
 from app.services.scenes.erp_role_diff import ErpRoleDiffService
 
@@ -598,17 +599,18 @@ class SetMinerService:
         n_extension = 0
         n_standalone = 0
         for group in sql_unit_groups:
-            base = group["base_unit"]
-            level = base.get("unit_level", "standalone")
-            if level == "base":
-                n_base += 1
-                for ei in base["entity_indices"]:
-                    for ii in base["item_indices"]:
-                        if matrix[ei, ii] == 1:
-                            base_covered.add((ei, ii))
-            elif level == "standalone":
-                n_standalone += 1
-            n_extension += len(group["units"])
+            for unit in [group["base_unit"], *group["units"]]:
+                level = unit.get("unit_level", "standalone")
+                if level == "base":
+                    n_base += 1
+                    for ei in unit["entity_indices"]:
+                        for ii in unit["item_indices"]:
+                            if matrix[ei, ii] == 1:
+                                base_covered.add((ei, ii))
+                elif level == "extension":
+                    n_extension += 1
+                else:
+                    n_standalone += 1
 
         base_coverage_pct = round(len(base_covered) / max(total_required, 1) * 100)
 
@@ -717,7 +719,7 @@ class SetMinerService:
                         "units": [],
                     }
                 )
-            return standalone_units, standalone_groups
+            return finalize_sql_unit_groups(standalone_units, standalone_groups)
 
         decorated_by_id = {str(unit["id"]): {**unit} for unit in units}
         raw_by_id = {str(unit["id"]): unit for unit in units}
@@ -962,7 +964,7 @@ class SetMinerService:
                 group["group_name"],
             )
         )
-        return ordered_units, groups
+        return finalize_sql_unit_groups(ordered_units, groups)
 
     def _build_assignments(
         self,

@@ -110,13 +110,17 @@ def _spawn(
     *,
     env: dict[str, str] | None = None,
     capture_output: bool = False,
+    isolate_process_group: bool = False,
 ) -> subprocess.Popen[str]:
     kwargs: dict[str, object] = {
         "cwd": str(cwd),
         "env": env or os.environ.copy(),
     }
-    if os.name == "nt" and new_console:
-        kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
+    if os.name == "nt":
+        if new_console:
+            kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
+        elif isolate_process_group:
+            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     if capture_output:
         kwargs["stdout"] = subprocess.PIPE
         kwargs["stderr"] = subprocess.STDOUT
@@ -174,6 +178,7 @@ def _run_dev_mode_same_window(
         BACKEND_DIR,
         new_console=False,
         capture_output=True,
+        isolate_process_group=True,
     )
     print(f"后端进程已启动，PID={backend_process.pid}")
 
@@ -184,6 +189,7 @@ def _run_dev_mode_same_window(
         new_console=False,
         env=frontend_env,
         capture_output=True,
+        isolate_process_group=True,
     )
     print(f"前端进程已启动，PID={frontend_process.pid}")
     print("启动完成。按 Ctrl+C 可同时停止前后端服务。")
@@ -207,6 +213,11 @@ def _run_dev_mode_same_window(
             backend_code = backend_process.poll()
             frontend_code = frontend_process.poll()
             if backend_code is not None or frontend_code is not None:
+                time.sleep(2)
+                backend_code = backend_process.poll()
+                frontend_code = frontend_process.poll()
+                if backend_code is None and frontend_code is None:
+                    continue
                 if backend_code not in (None, 0):
                     print(f"后端开发服务已退出，退出码={backend_code}")
                     exit_code = backend_code

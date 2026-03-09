@@ -420,6 +420,34 @@ class SetMinerServiceSqlUnitTests(unittest.TestCase):
             constraints=ConstraintConfig(max_items_per_unit=20, max_units_per_entity=3),
         )
 
+    def _build_same_signature_standalone_dataset(self) -> SceneDataset:
+        items = [
+            Item(id="a::id", name="id", group="table_a", source="table_a"),
+            Item(id="a::name", name="name", group="table_a", source="table_a"),
+            Item(id="a::flag", name="flag", group="table_a", source="table_a"),
+            Item(id="b::id", name="biz_id", group="table_b", source="table_b"),
+            Item(id="b::name", name="biz_name", group="table_b", source="table_b"),
+            Item(id="b::flag", name="biz_flag", group="table_b", source="table_b"),
+        ]
+        return SceneDataset(
+            scene="sql",
+            entities=[
+                Entity(id="sql_1", name="sql_1.sql"),
+                Entity(id="sql_2", name="sql_2.sql"),
+                Entity(id="sql_3", name="sql_3.sql"),
+            ],
+            items=items,
+            relations=[
+                Relation(entity_id="sql_1", item_id="a::id"),
+                Relation(entity_id="sql_1", item_id="b::id"),
+                Relation(entity_id="sql_2", item_id="a::name"),
+                Relation(entity_id="sql_2", item_id="b::name"),
+                Relation(entity_id="sql_3", item_id="a::flag"),
+                Relation(entity_id="sql_3", item_id="b::flag"),
+            ],
+            constraints=ConstraintConfig(max_items_per_unit=20, max_units_per_entity=3),
+        )
+
     def test_sql_unit_name_uses_combination_name_for_multi_source_unit(self) -> None:
         dataset = self._build_dataset(
             [
@@ -617,8 +645,10 @@ class SetMinerServiceSqlUnitTests(unittest.TestCase):
         self.assertEqual(groups[0]["base_unit"]["name"], "table_a+table_b基础宽表")
         self.assertEqual(groups[0]["base_unit"]["unit_level"], "base")
         self.assertEqual(len(groups[0]["units"]), 4)
-        self.assertTrue(any(unit["name"] == "table_a+table_b扩展宽表(+table_c)" for unit in groups[0]["units"]))
-        self.assertEqual({unit["unit_level"] for unit in final_units}, {"extension"})
+        extension_names = [unit["name"] for unit in groups[0]["units"]]
+        self.assertTrue(any(name.startswith("table_a+table_b扩展宽表(+table_c)") for name in extension_names))
+        self.assertEqual(len(extension_names), len(set(extension_names)))
+        self.assertEqual({unit["unit_level"] for unit in final_units}, {"base", "extension"})
 
     def test_build_sql_unit_groups_exposes_suggested_fields_by_threshold(self) -> None:
         dataset = SceneDataset(
@@ -661,6 +691,35 @@ class SetMinerServiceSqlUnitTests(unittest.TestCase):
         self.assertEqual(base_unit["suggested_item_names"], ["sub_class"])
         self.assertEqual(base_unit["suggested_item_sources"], ["table_b"])
         self.assertEqual(base_unit["suggested_item_hits"], [2])
+
+    def test_solve_groups_same_signature_standalone_variants_into_one_family(self) -> None:
+        dataset = self._build_same_signature_standalone_dataset()
+        original_select_units = self.service._select_units
+        self.service._select_units = lambda *_args, **_kwargs: [
+            {"id": "unit-1", "item_indices": [0, 3], "entity_indices": [0], "score": 2.0},
+            {"id": "unit-2", "item_indices": [1, 4], "entity_indices": [1], "score": 2.0},
+            {"id": "unit-3", "item_indices": [2, 5], "entity_indices": [2], "score": 2.0},
+        ]
+        try:
+            result = self.service.solve(dataset)
+        finally:
+            self.service._select_units = original_select_units
+
+        self.assertIsNotNone(result.sql_unit_groups)
+        assert result.sql_unit_groups is not None
+        self.assertEqual(len(result.sql_unit_groups), 1)
+
+        family = result.sql_unit_groups[0]
+        self.assertEqual(family.group_name, "table_a+table_b组合宽表族")
+        self.assertEqual(family.base_unit.name, "table_a+table_b组合宽表1")
+        self.assertEqual([unit.name for unit in family.units], [
+            "table_a+table_b组合宽表2",
+            "table_a+table_b组合宽表3",
+        ])
+        self.assertTrue(all(unit.unit_level == "standalone" for unit in [family.base_unit, *family.units]))
+
+        summary_map = {metric.label: metric for metric in result.summary}
+        self.assertEqual(summary_map["推荐宽表数"].hint, "基础 0 + 扩展 0 + 独立 3")
 
     @staticmethod
     def _matrix(rows: int, cols: int):

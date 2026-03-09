@@ -52,8 +52,8 @@ function SourceGroupedFields({
   sourceDetails?: string[]
   hits?: number[]
   supportCount?: number | null
-  tagContainerWidth?: number
-  tagMaxWidth?: number
+  tagContainerWidth?: number | string
+  tagMaxWidth?: number | string
 }) {
   const groups = groupFieldsBySource(names, sources)
   if (groups.length === 0) {
@@ -331,29 +331,35 @@ export function SqlUnitGroupsView({ groups }: SqlUnitGroupsViewProps) {
   const panelItems = useMemo(
     () => groups.map((group, index) => {
       const panelKey = `${group.key}__${index}`
+      const familyUnits = [group.base_unit, ...group.units]
+      const isStandaloneFamily = group.base_unit.unit_level === 'standalone'
+      const hasStandaloneVariants = isStandaloneFamily && group.units.length > 0
+
       return {
         key: panelKey,
         label: (
           <Space size={8} wrap>
             <Text strong>{group.group_name}</Text>
-            <Tag color={group.base_unit.unit_level === 'standalone' ? 'default' : 'gold'}>
-              {group.base_unit.unit_level === 'standalone' ? '独立宽表' : '基础宽表组'}
+            <Tag color={isStandaloneFamily ? 'default' : 'gold'}>
+              {hasStandaloneVariants ? '同源宽表族' : isStandaloneFamily ? '独立宽表' : '基础宽表组'}
             </Tag>
             <Text type="secondary" style={{ fontSize: 12 }}>
-              {group.base_unit.unit_level === 'standalone'
-                ? `${group.base_unit.covered_entity_names.length} 个 SQL`
+              {isStandaloneFamily
+                ? hasStandaloneVariants
+                  ? `${familyUnits.length} 个变体`
+                  : `${group.base_unit.covered_entity_names.length} 个 SQL`
                 : `${1 + group.units.length} 层结果`}
             </Text>
           </Space>
         ),
-        children: group.base_unit.unit_level === 'standalone'
+        children: isStandaloneFamily
           ? (
             <Table
               rowKey="id"
               pagination={false}
               size="small"
               scroll={{ x: 'max-content' }}
-              dataSource={[group.base_unit]}
+              dataSource={familyUnits}
               columns={extensionColumns}
             />
           )
