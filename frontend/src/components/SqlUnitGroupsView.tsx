@@ -46,6 +46,7 @@ function SourceGroupedFields({
   supportCount,
   tagContainerWidth,
   tagMaxWidth,
+  tagMaxVisible,
 }: {
   names: string[]
   sources: string[]
@@ -54,6 +55,7 @@ function SourceGroupedFields({
   supportCount?: number | null
   tagContainerWidth?: number | string
   tagMaxWidth?: number | string
+  tagMaxVisible?: number
 }) {
   const groups = groupFieldsBySource(names, sources)
   if (groups.length === 0) {
@@ -103,6 +105,7 @@ function SourceGroupedFields({
             <div style={{ flex: 1, minWidth: 220 }}>
               <TagsCell
                 items={fieldItems}
+                maxVisible={tagMaxVisible}
                 containerWidth={tagContainerWidth}
                 tagMaxWidth={tagMaxWidth}
               />
@@ -165,16 +168,6 @@ function buildExtensionColumns(): TableColumnsType<SolutionUnit> {
       },
     },
     {
-      title: '新增来源',
-      key: 'extra_sources',
-      width: 220,
-      render: (_: unknown, record: SolutionUnit) => (
-        record.extra_source_tables.length
-          ? <PlainTagsCell items={record.extra_source_tables} maxVisible={4} containerWidth={200} tagMaxWidth={180} />
-          : <Text type="secondary">无</Text>
-      ),
-    },
-    {
       title: '全部字段',
       key: 'all_items',
       width: 420,
@@ -183,6 +176,7 @@ function buildExtensionColumns(): TableColumnsType<SolutionUnit> {
           names={record.item_display_names}
           sources={record.item_sources}
           sourceDetails={record.item_source_details}
+          tagMaxVisible={16}
         />
       ),
     },
@@ -197,6 +191,7 @@ function buildExtensionColumns(): TableColumnsType<SolutionUnit> {
               names={record.extra_item_names}
               sources={record.extra_item_sources}
               sourceDetails={record.extra_item_source_details}
+              tagMaxVisible={16}
             />
           )
           : <Text type="secondary">与基础宽表一致</Text>
@@ -267,6 +262,9 @@ function BaseUnitSummary({ unit, extensionCount }: { unit: SolutionUnit; extensi
           names={unit.item_display_names}
           sources={unit.item_sources}
           sourceDetails={unit.item_source_details}
+          tagContainerWidth="100%"
+          tagMaxWidth={undefined}
+          tagMaxVisible={20}
         />
       </Descriptions.Item>
       <Descriptions.Item

@@ -17,6 +17,7 @@ interface TagItem {
 
 interface TagsCellProps {
   items: TagItem[]
+  maxVisible?: number
   containerWidth?: number | string
   tagMaxWidth?: number | string
 }
@@ -38,12 +39,13 @@ function ExprTooltipContent({ expr }: { expr: string }) {
 
 export function TagsCell({
   items,
+  maxVisible = TAGS_COLLAPSED_MAX,
   containerWidth = 340,
   tagMaxWidth = 160,
 }: TagsCellProps) {
   const [expanded, setExpanded] = useState(false)
-  const visible = expanded ? items : items.slice(0, TAGS_COLLAPSED_MAX)
-  const extra = items.length - TAGS_COLLAPSED_MAX
+  const visible = expanded ? items : items.slice(0, maxVisible)
+  const extra = items.length - maxVisible
 
   return (
     <div style={{ maxWidth: containerWidth }}>
@@ -102,7 +104,7 @@ export function TagsCell({
           +{extra} 更多
         </Tag>
       )}
-      {expanded && items.length > TAGS_COLLAPSED_MAX && (
+      {expanded && items.length > maxVisible && (
         <Tag color="default" style={{ cursor: 'pointer', marginBottom: 2 }} onClick={() => setExpanded(false)}>
           收起
         </Tag>
