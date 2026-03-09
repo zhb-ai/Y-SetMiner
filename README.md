@@ -32,7 +32,13 @@ python -m uvicorn start_setminer:app --host 127.0.0.1 --port 5555
 
 ### 开发模式
 
-如果希望以前后端分离、便于热更新调试，可直接一行命令启动：
+如果希望以前后端分离、便于热更新调试，推荐使用单窗口模式（日志合并输出，`Ctrl+C` 一键停止）：
+
+```powershell
+python -m start_setminer --dev --same-window
+```
+
+也可以不加 `--same-window`，此时 Windows 下会为前后端各新开一个终端窗口：
 
 ```powershell
 python -m start_setminer --dev
@@ -54,7 +60,7 @@ start_setminer_dev.bat
 - 该模式会同时启动后端 `uvicorn --reload` 和前端 `vite dev`
 - 修改后端代码时会自动重载后端
 - 修改前端代码时会自动热更新页面，无需重新构建 `frontend/dist`
-- `--same-window` 模式下会在当前终端持续输出前后端日志，并附加 `[backend]` / `[frontend]` 前缀，按 `Ctrl+C` 可一起停止
+- `--same-window` 会在当前终端持续输出前后端日志，并附加 `[backend]` / `[frontend]` 前缀，按 `Ctrl+C` 可一起停止
 - 如只想检查开发环境是否齐全，可执行 `python -m start_setminer --dev --check-only`
 - 如需自定义端口，可执行：
 
