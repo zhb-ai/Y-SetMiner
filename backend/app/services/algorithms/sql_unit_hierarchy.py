@@ -58,9 +58,11 @@ def mine_sql_base_candidates(
             for subset in combinations(source_signature, subset_size):
                 subset_support[subset].append(unit_index)
 
+    effective_min_support = min(min_support, max(2, len(units) // 3))
+
     candidates: list[SqlBaseCandidate] = []
     for source_subset, support_indices in subset_support.items():
-        if len(support_indices) < min_support:
+        if len(support_indices) < effective_min_support:
             continue
 
         support_units = [units[idx] for idx in support_indices]

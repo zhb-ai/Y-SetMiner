@@ -751,7 +751,8 @@ class SqlSolveEndToEndTests(unittest.TestCase):
         self.assertTrue(all(unit.unit_level in {"base", "extension", "standalone"} for unit in result.units))
         self.assertTrue(
             any(
-                unit.name.startswith("bd_cubasdoc+po_invoice+po_invoice_b")
+                unit.name.startswith("bd_cubasdoc+po_invoice_b")
+                or unit.name.startswith("bd_cubasdoc+po_invoice+po_invoice_b")
                 or unit.name.startswith("bd_cubasdoc+bd_invbasdoc+po_invoice+po_invoice_b")
                 for unit in result.units
             ),
@@ -763,7 +764,11 @@ class SqlSolveEndToEndTests(unittest.TestCase):
         )
         self.assertTrue(procurement_compare_assignment.unit_names)
         self.assertTrue(
-            any("bd_cubasdoc+po_invoice+po_invoice_b组合宽表" in unit_name for unit_name in procurement_compare_assignment.unit_names)
+            any(
+                "bd_cubasdoc+po_invoice_b" in unit_name
+                or "bd_cubasdoc+po_invoice+po_invoice_b" in unit_name
+                for unit_name in procurement_compare_assignment.unit_names
+            ),
         )
 
     def test_end_to_end_sql_solve_surfaces_join_risk_warning(self) -> None:

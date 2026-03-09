@@ -225,8 +225,8 @@ class SetMinerService:
                 sub_original = matrix[:, item_positions_trunc]
                 k = len(item_positions_trunc)
 
-                # 实体必须在原始矩阵中拥有该候选的大部分字段（至少 50%）
-                entity_has = (sub_original.sum(axis=1) / k) >= 0.5
+                entity_threshold = 0.35 if k >= 6 else 0.5
+                entity_has = (sub_original.sum(axis=1) / k) >= entity_threshold
                 entity_indices = np.where(entity_has)[0].tolist()
                 if not entity_indices:
                     continue
@@ -264,13 +264,47 @@ class SetMinerService:
             )
             residual[np.ix_(best_entity_indices, final_item_indices)] = 0
 
-        # 尾部补齐：把剩余未覆盖的字段合并到已有的最相似宽表，实在无法合并才新建
+        # 尾部补齐：把剩余未覆盖的字段按来源亲和性分发到已有宽表，实在无法合并才新建
         for row_index in range(n):
             remaining = np.where(residual[row_index] == 1)[0].tolist()
             if not remaining:
                 continue
 
-            # 尝试把剩余字段并入已有宽表（找字段集合重叠最多的宽表）
+            # SQL 场景：先按来源表亲和性把字段分发到对应宽表，避免跨主题污染
+            if dataset.scene == "sql":
+                distributed: set[int] = set()
+                for u_idx, unit in enumerate(selected_units):
+                    unit_sources = {
+                        dataset.items[idx].source
+                        for idx in unit["item_indices"]
+                        if idx < len(dataset.items)
+                        and dataset.items[idx].source
+                        and dataset.items[idx].source not in {"unknown", "derived"}
+                    }
+                    if not unit_sources:
+                        continue
+                    affine = [
+                        idx for idx in remaining
+                        if idx not in distributed
+                        and idx < len(dataset.items)
+                        and dataset.items[idx].source in unit_sources
+                    ]
+                    if not affine:
+                        continue
+                    merged = sorted(set(unit["item_indices"]) | set(affine))
+                    if len(merged) <= max_items:
+                        unit["item_indices"] = merged
+                        if row_index not in unit["entity_indices"]:
+                            unit["entity_indices"].append(row_index)
+                        for idx in affine:
+                            residual[row_index, idx] = 0
+                        distributed.update(affine)
+
+                remaining = [idx for idx in remaining if idx not in distributed]
+                if not remaining:
+                    continue
+
+            # 通用回退：尝试把剩余字段并入字段重叠最多的已有宽表
             best_unit_idx = -1
             best_overlap = 0
             for u_idx, unit in enumerate(selected_units):
@@ -285,7 +319,8 @@ class SetMinerService:
                     selected_units[best_unit_idx]["item_indices"] = merged
                     if row_index not in selected_units[best_unit_idx]["entity_indices"]:
                         selected_units[best_unit_idx]["entity_indices"].append(row_index)
-                    residual[row_index, remaining] = 0
+                    for idx in remaining:
+                        residual[row_index, idx] = 0
                     continue
 
             # 无法合并时新建补充宽表
@@ -360,9 +395,14 @@ class SetMinerService:
         left_sources = self._get_unit_source_signature(dataset, left_unit)
         right_sources = self._get_unit_source_signature(dataset, right_unit)
 
-        # 来源集合不同，说明语义层级通常已经不同，不做硬合并。
-        if left_sources != right_sources:
-            return False
+        left_source_set = set(left_sources)
+        right_source_set = set(right_sources)
+        if left_source_set and right_source_set:
+            is_subset = left_source_set.issubset(right_source_set) or right_source_set.issubset(left_source_set)
+            if not is_subset:
+                source_jaccard = len(left_source_set & right_source_set) / max(len(left_source_set | right_source_set), 1)
+                if source_jaccard < 0.5:
+                    return False
 
         left_items = set(left_unit["item_indices"])
         right_items = set(right_unit["item_indices"])
@@ -377,7 +417,6 @@ class SetMinerService:
         right_entities = set(right_unit["entity_indices"])
         entity_overlap = len(left_entities & right_entities) / max(len(left_entities | right_entities), 1)
 
-        # 实体完全不同但字段又不算足够接近时，也不合并。
         return entity_overlap > 0 or item_overlap >= 0.6
 
     def _merge_similar_sql_units(
@@ -975,26 +1014,31 @@ class SetMinerService:
         assignments: list[Assignment] = []
         for row_idx, entity_name in enumerate(bundle.entity_names):
             entity_need = set(np.where(matrix[row_idx] == 1)[0].tolist())
-            matched_units = []
+            matched_units: list[dict[str, object]] = []
             covered_items: set[int] = set()
+
+            # 对每个宽表按"与当前实体需求的交集大小"打分，优先选成员宽表
+            scored: list[tuple[int, int, float, dict[str, object]]] = []
             for unit in units:
-                if row_idx not in unit["entity_indices"]:
-                    continue
                 unit_item_indices = set(unit["item_indices"])
-                if unit_item_indices.issubset(entity_need):
-                    matched_units.append(unit)
-                    covered_items |= unit_item_indices
+                overlap = unit_item_indices & entity_need
+                if not overlap:
+                    continue
+                is_member = 1 if row_idx in unit["entity_indices"] else 0
+                scored.append((is_member, len(overlap), float(unit.get("score", 0)), unit))
+
+            scored.sort(key=lambda x: (-x[0], -x[1], -x[2]))
+
+            # 贪心选取：每轮挑增量覆盖最大的宽表
+            for _, _, _, unit in scored:
+                unit_item_indices = set(unit["item_indices"])
+                new_coverage = (unit_item_indices & entity_need) - covered_items
+                if not new_coverage:
+                    continue
+                matched_units.append(unit)
+                covered_items |= (unit_item_indices & entity_need)
                 if len(matched_units) >= 3 or covered_items == entity_need:
                     break
-
-            if not matched_units:
-                for unit in units:
-                    unit_item_indices = set(unit["item_indices"])
-                    if unit_item_indices & entity_need:
-                        matched_units.append(unit)
-                        covered_items |= unit_item_indices
-                    if len(matched_units) >= 3 or covered_items == entity_need:
-                        break
 
             uncovered_names = [bundle.item_names[item_idx] for item_idx in sorted(entity_need - covered_items)]
             assignments.append(
